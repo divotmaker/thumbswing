@@ -1,0 +1,87 @@
+[package]
+name = "thumbswing"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.94"
+description = "Trackball launch monitor: an arcade-style trackball swing turned into a full golf shot"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/divotmaker/thumbswing"
+readme = "README.md"
+keywords = ["golf", "launch-monitor", "trackball", "evdev", "simulator"]
+categories = ["hardware-support", "simulation"]
+exclude = ["CLAUDE.md", ".github/", "rust-toolchain.toml"]
+
+[dependencies]
+thiserror = "2"
+# The driver config types (`config`), the `DeviceDriver` impl (`driver`) and
+# the `thumbswing-frp` binary (`frp`).
+flightrelay = { version = "0.5", default-features = false, optional = true }
+# Serde on `Settings`, `Config`, `Thresholds`, `Tuning`, `Club` and `Hand`
+# (`config`).
+serde = { version = "1", features = ["derive"], optional = true }
+# `--config` / `--set` for the binary's replay mode; the same crate and major
+# version flightrelay's `main` feature already builds.
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "display"], optional = true }
+# Ctrl-C for the binary's replay mode, as flightrelay's `main` feature
+# handles it for the device mode (the same crate).
+ctrlc = { version = "3", features = ["termination"], optional = true }
+
+# Linux evdev backend: open/read/poll and the evdev ioctls, without bindings.
+# Also the Ctrl-C handler of the examples and the binary.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# Flies the worked examples of the README in tests/worked_examples.rs.
+dimple = "0.0.7"
+# Builds config maps in the driver config tests (already a flightrelay
+# dependency).
+serde_json = "1"
+
+[features]
+default = []
+# The serde driver config (`Settings` as a `flightrelay` `DriverConfig`),
+# with no device stack: what a settings form or a WebAssembly UI enables.
+config = ["dep:flightrelay", "flightrelay/config", "dep:serde"]
+# `thumbswing::driver`: the `DeviceDriver` impl a host such as flighthook runs.
+driver = ["config", "flightrelay/driver"]
+# The `thumbswing-frp` binary: the driver served over FRP.
+frp = ["driver", "flightrelay/server", "flightrelay/main", "dep:toml", "dep:ctrlc"]
+# Synthetic swing builders, a manual clock and fixture helpers
+# (`thumbswing::testing`) for tests of code that consumes the crate.
+testing = []
+
+[[bin]]
+name = "thumbswing-frp"
+path = "src/bin/thumbswing-frp.rs"
+required-features = ["frp"]
+
+[[test]]
+name = "fixtures"
+required-features = ["testing"]
+
+[[test]]
+name = "segmenter"
+required-features = ["testing"]
+
+[[test]]
+name = "uinput"
+required-features = ["testing"]
+
+[[test]]
+name = "driver"
+required-features = ["driver", "testing"]
+
+[[test]]
+name = "settings"
+required-features = ["config"]
+
+[[test]]
+name = "frp"
+required-features = ["frp", "testing"]
+
+[package.metadata.docs.rs]
+features = ["frp", "testing"]
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,12 @@
+{
+  "note": "Generated synthetically by thumbswing::testing (tests/fixtures.rs), not recorded from hardware.",
+  "tol_deg": 1.5,
+  "tol_speed_pct": 3,
+  "tol_len_in": 0.1,
+  "swings": [
+    {"back_dir_deg": 10, "back_len_in": 1.5, "fwd_dir_deg": 0, "fwd_peak_in_s": 30},
+    {"back_dir_deg": -20, "back_len_in": 1.5, "fwd_dir_deg": 8, "fwd_peak_in_s": 22},
+    {"back_dir_deg": 0, "back_len_in": 1.5, "fwd_dir_deg": -10, "fwd_peak_in_s": 15}
+  ],
+  "cancels": ["Dribble", "Short"]
+}

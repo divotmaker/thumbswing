@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --all-targets --features frp,testing -- -D warnings
+
+      - name: Run tests
+        run: cargo test --features frp,testing
+
+      # The config types build alone, with no device stack, also for
+      # WebAssembly (a settings form).
+      - name: Config-only build
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo build --lib --no-default-features --features config
+          cargo build --lib --target wasm32-unknown-unknown --no-default-features --features config
+
+      # The core builds on every platform; off Linux, opening a device
+      # returns "not supported". Check it against a non-Linux target.
+      - name: Add Windows target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Clippy (Windows target)
+        run: cargo clippy --all-targets --target x86_64-pc-windows-gnu --features frp,testing -- -D warnings
+
+  uinput:
+    name: Kernel input (uinput)
+    runs-on: ubuntu-latest
+    # Runner images without the uinput module cannot run this job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Allow access to uinput and new input nodes
+        run: |
+          printf '%s\n' 'KERNEL=="uinput", MODE="0666"' \
+            'SUBSYSTEM=="input", KERNEL=="event*", MODE="0666"' \
+            | sudo tee /etc/udev/rules.d/99-thumbswing-ci.rules
+          sudo udevadm control --reload-rules
+          sudo modprobe uinput
+          sudo udevadm trigger
+          sudo chmod 666 /dev/uinput
+
+      - name: uinput test
+        run: cargo test --features testing --test uinput -- --ignored
