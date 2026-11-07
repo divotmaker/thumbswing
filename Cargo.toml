@@ -1,6 +1,6 @@
 [package]
 name = "thumbswing"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 rust-version = "1.94"
 description = "Trackball launch monitor: an arcade-style trackball swing turned into a full golf shot"
