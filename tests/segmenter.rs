@@ -98,7 +98,7 @@ fn close(a: f64, b: f64, tol: f64) -> bool {
 fn straight_swing_is_one_square_shot_at_the_reference_speed() {
     for rate in RATES {
         let events = client_events(
-            &basic(rate, 0.0, 0.0, 30.0, 300.0),
+            &basic(rate, 0.0, 0.0, 15.0, 300.0),
             Club::Iron7,
             Tuning::default(),
         );
@@ -128,7 +128,7 @@ fn straight_swing_is_one_square_shot_at_the_reference_speed() {
             "{rate} Hz: V {}",
             d.club_speed_mph
         );
-        assert!(close(shot.swing.fwd_peak_in_s, 30.0, 0.6), "{rate} Hz");
+        assert!(close(shot.swing.fwd_peak_in_s, 15.0, 0.3), "{rate} Hz");
         assert!(!shot.raw.is_empty());
     }
 }
@@ -222,12 +222,12 @@ fn push_right_of_a_straight_pull() {
 fn half_the_peak_halves_power_club_speed_and_ball_speed() {
     for rate in RATES {
         let full = shots(&client_events(
-            &basic(rate, 0.0, 0.0, 24.0, 300.0),
+            &basic(rate, 0.0, 0.0, 12.0, 300.0),
             Club::Iron7,
             Tuning::default(),
         ));
         let half = shots(&client_events(
-            &basic(rate, 0.0, 0.0, 12.0, 300.0),
+            &basic(rate, 0.0, 0.0, 6.0, 300.0),
             Club::Iron7,
             Tuning::default(),
         ));

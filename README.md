@@ -37,7 +37,7 @@ pull toward the player's left gives `b > 0`), `δ = b − f` and `p` the power:
 
 | Step | Formula | Default |
 |---|---|---|
-| Power | `p = clamp(v_peak / full_power_speed, 0, 1)^γ` | `full_power_speed` 30 in/s, `γ` 1 |
+| Power | `p = clamp(v_peak / full_power_speed, 0, 1)^γ` | `full_power_speed` 15 in/s, `γ` 1 |
 | Club speed | `V = p · max_club_speed · speed_ratio` | 100 mph |
 | Face | `F = clamp(angle_gain · f, ±20°)` | `angle_gain` 0.25 |
 | Path, arcade sense | `P = F − curve_gain · δ` | `curve_gain` 0.20 |
@@ -221,7 +221,7 @@ device is opened. The status line of `monitor` shows the values in
 use:
 
 ```text
-full 30.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 | 7I RH | last 7I: back +12.0° 1.4 in, fwd −3.0° 27.1 in/s → 90 % 72 mph, path +1.1 face −0.8
+full 15.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 | 7I RH | last 7I: back +12.0° 1.4 in, fwd −3.0° 13.5 in/s → 90 % 72 mph, path +1.1 face −0.8
 ```
 
 | Key | `monitor` flag | Default | Unit | What it sets |
@@ -232,7 +232,7 @@ full 30.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 |
 | `cpi` | `--cpi N` | 400 | counts/in | counts per inch of ball surface travel |
 | `report_limit` | `--report-limit N` | 127 | counts | largest `\|dx\|`/`\|dy\|` one report carries: 127, 2047 or 32767 |
 | `grab` | `--no-grab` | true | | exclusive grab, so the desktop cursor does not follow the ball |
-| `tuning.full_power_speed` | `--full-power-speed X` | 30 | in/s | forward peak speed that counts as 100 % power |
+| `tuning.full_power_speed` | `--full-power-speed X` | 15 | in/s | forward peak speed that counts as 100 % power |
 | `tuning.max_club_speed` | `--max-club-speed X` | 100 | mph | driver club speed at full power (other clubs scale it) |
 | `tuning.max_putt_speed` | `--max-putt-speed X` | 11 | mph | putter club speed at full power |
 | `tuning.angle_gain` | `--angle-gain X` | 0.25 | °/° | face angle per degree of push direction |
@@ -272,8 +272,8 @@ full_power_speed = 40
 curve_sense = "physical"
 ```
 
-`ℓ_full` is the ball travel of 100 ms at full power (3 in at the default
-30 in/s). Every detection threshold is a fraction of the full-power speed or
+`ℓ_full` is the ball travel of 100 ms at full power (1.5 in at the default
+15 in/s). Every detection threshold is a fraction of the full-power speed or
 of `ℓ_full`, so setting `full_power_speed` to how hard you want 100 % to be
 adapts them all to the device. With `monitor --replay`, `--cpi` and
 `--report-limit` default to the recording's header.

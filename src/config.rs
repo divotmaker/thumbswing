@@ -123,7 +123,7 @@ pub struct Tuning {
 impl Default for Tuning {
     fn default() -> Self {
         Self {
-            full_power_speed: 30.0,
+            full_power_speed: 15.0,
             max_club_speed: 100.0,
             max_putt_speed: 11.0,
             angle_gain: 0.25,
@@ -144,7 +144,7 @@ impl Default for Tuning {
 /// Speeds are fractions of [`Tuning::full_power_speed`] and lengths are
 /// fractions of `ℓ_full`, the distance the ball travels in 100 ms at full
 /// power, so setting the full-power speed scales all of them. The
-/// values in parentheses are at the default 30 in/s (`ℓ_full` = 3 in).
+/// values in parentheses are at the default 15 in/s (`ℓ_full` = 1.5 in).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(default))]
@@ -161,19 +161,19 @@ pub struct Thresholds {
         serde(skip_serializing_if = "skip::thresholds::gap_ms")
     )]
     pub gap_ms: u32,
-    /// Speed that starts a backswing (2 in/s).
+    /// Speed that starts a backswing (1 in/s).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::v_start")
     )]
     pub v_start: f64,
-    /// Speed below which the ball counts as stopped (1 in/s).
+    /// Speed below which the ball counts as stopped (0.5 in/s).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::v_stop")
     )]
     pub v_stop: f64,
-    /// Speed a forward stroke must reach to be a swing (4 in/s).
+    /// Speed a forward stroke must reach to be a swing (2 in/s).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::v_min_swing")
@@ -185,19 +185,19 @@ pub struct Thresholds {
         serde(skip_serializing_if = "skip::thresholds::dwell_min_ms")
     )]
     pub dwell_min_ms: u32,
-    /// Shortest backswing (0.4 in).
+    /// Shortest backswing (0.2 in).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::back_min")
     )]
     pub back_min: f64,
-    /// Backswing length that counts as fully cocked (2 in).
+    /// Backswing length that counts as fully cocked (1 in).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::full_cock")
     )]
     pub full_cock: f64,
-    /// Forward travel that makes a forward motion a stroke (0.5 in).
+    /// Forward travel that makes a forward motion a stroke (0.25 in).
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "skip::thresholds::fwd_min")

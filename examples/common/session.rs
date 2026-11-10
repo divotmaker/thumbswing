@@ -81,7 +81,7 @@ fn signed(v: f64) -> String {
 /// One status line: the settings that shape a shot, the club and hand, and
 /// the last shot.
 ///
-/// `full 30.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 | 7I RH | last 7I: back +12.0° 1.4 in, fwd −3.0° 27.1 in/s → 90 % 72 mph, path +1.1 face −0.8`
+/// `full 15.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 | 7I RH | last 7I: back +12.0° 1.4 in, fwd −3.0° 13.5 in/s → 90 % 72 mph, path +1.1 face −0.8`
 pub fn status_line<I: Input>(client: &Client<I>, last: Option<&Shot>) -> String {
     let t = client.tuning();
     let mut s = String::new();

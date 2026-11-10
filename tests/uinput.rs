@@ -140,9 +140,9 @@ impl Drop for VirtualMouse {
 
 fn swing() -> Vec<Sample> {
     StreamBuilder::new(125.0)
-        .pull(0.0, 600.0, 150.0)
+        .pull(0.0, 300.0, 150.0)
         .pause_ms(300.0)
-        .push(0.0, 1200.0, 100.0)
+        .push(0.0, 600.0, 100.0)
         .build()
 }
 
@@ -199,7 +199,7 @@ fn a_swing_through_the_kernel_then_unplug_and_replug() {
     assert!(shot.swing.back_dir_deg.abs() < 1.5, "{:?}", shot.swing);
     assert!(shot.swing.fwd_dir_deg.abs() < 1.5);
     assert!(
-        (shot.swing.fwd_peak_in_s / 30.0 - 1.0).abs() < 0.05,
+        (shot.swing.fwd_peak_in_s / 15.0 - 1.0).abs() < 0.05,
         "{:?}",
         shot.swing
     );

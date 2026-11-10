@@ -165,8 +165,9 @@ mod tests {
     #[test]
     fn half_the_peak_is_half_the_club_speed() {
         let t = Tuning::default();
-        let full = delivery(&swing(0.0, 0.0, 30.0), Club::Iron7, Hand::Right, &t);
-        let half = delivery(&swing(0.0, 0.0, 15.0), Club::Iron7, Hand::Right, &t);
+        let peak = t.full_power_speed;
+        let full = delivery(&swing(0.0, 0.0, peak), Club::Iron7, Hand::Right, &t);
+        let half = delivery(&swing(0.0, 0.0, peak / 2.0), Club::Iron7, Hand::Right, &t);
         assert_close(full.club_speed_mph, 80.0);
         assert_close(half.club_speed_mph, 40.0);
         let lf = launch_for(&full, Club::Iron7, &Smash::LOFT_LINEAR);
@@ -178,18 +179,19 @@ mod tests {
     #[test]
     fn power_is_capped_and_shaped() {
         let t = Tuning::default();
-        assert_close(power(&swing(0.0, 0.0, 60.0), &t), 1.0);
+        let peak = t.full_power_speed;
+        assert_close(power(&swing(0.0, 0.0, 2.0 * peak), &t), 1.0);
         let g = Tuning {
             power_gamma: 2.0,
             ..t
         };
-        assert_close(power(&swing(0.0, 0.0, 15.0), &g), 0.25);
+        assert_close(power(&swing(0.0, 0.0, peak / 2.0), &g), 0.25);
         let b = Tuning {
             backswing_power: 0.5,
             ..t
         };
         // back_fraction 0.75: 1 − 0.5 + 0.5·0.75 = 0.875.
-        assert_close(power(&swing(0.0, 0.0, 30.0), &b), 0.875);
+        assert_close(power(&swing(0.0, 0.0, peak), &b), 0.875);
     }
 
     #[test]

@@ -93,29 +93,29 @@ fn fixture_125() -> Fixture {
         "straight: pull straight back, push straight, full power",
     ));
     b = b
-        .pull(0.0, c(1.5), 150.0)
+        .pull(0.0, c(0.75), 150.0)
         .pause_ms(400.0)
-        .push(0.0, c(3.0), 100.0)
-        .push(0.0, c(0.5), 200.0);
+        .push(0.0, c(1.5), 100.0)
+        .push(0.0, c(0.25), 200.0);
     b = idle(b, 3);
     marks.push((
         b.clone().build().len(),
         "draw stroke: pull 30° right, push straight, 90 %",
     ));
     b = b
-        .pull(-30.0, c(1.2), 150.0)
+        .pull(-30.0, c(0.6), 150.0)
         .pause_ms(300.0)
-        .push(0.0, c(2.7), 100.0)
-        .push(0.0, c(0.4), 200.0);
+        .push(0.0, c(1.35), 100.0)
+        .push(0.0, c(0.2), 200.0);
     b = idle(b, 3);
     marks.push((
         b.clone().build().len(),
         "fade stroke: pull 15° left, push 5° left in one motion, 67 %",
     ));
     b = b
-        .pull(15.0, c(1.8), 200.0)
-        .push(-5.0, c(2.0), 100.0)
-        .push(-5.0, c(0.4), 200.0);
+        .pull(15.0, c(0.9), 200.0)
+        .push(-5.0, c(1.0), 100.0)
+        .push(-5.0, c(0.2), 200.0);
     b = idle(b, 3);
     Fixture {
         name: "straight_draw_fade_125hz",
@@ -128,9 +128,9 @@ fn fixture_125() -> Fixture {
   "tol_speed_pct": 3,
   "tol_len_in": 0.1,
   "swings": [
-    {"back_dir_deg": 0, "back_len_in": 1.5, "fwd_dir_deg": 0, "fwd_peak_in_s": 30},
-    {"back_dir_deg": -30, "back_len_in": 1.2, "fwd_dir_deg": 0, "fwd_peak_in_s": 27},
-    {"back_dir_deg": 15, "back_len_in": 1.8, "fwd_dir_deg": -5, "fwd_peak_in_s": 20}
+    {"back_dir_deg": 0, "back_len_in": 0.75, "fwd_dir_deg": 0, "fwd_peak_in_s": 15},
+    {"back_dir_deg": -30, "back_len_in": 0.6, "fwd_dir_deg": 0, "fwd_peak_in_s": 13.5},
+    {"back_dir_deg": 15, "back_len_in": 0.9, "fwd_dir_deg": -5, "fwd_peak_in_s": 10}
   ],
   "cancels": []
 }
@@ -149,37 +149,37 @@ fn fixture_1000() -> Fixture {
         "wobble at the top, then a full push",
     ));
     b = b
-        .pull(10.0, c(1.5), 150.0)
+        .pull(10.0, c(0.75), 150.0)
         .pause_ms(150.0)
         .report(0, -1)
         .report(0, -1)
         .pause_ms(250.0)
-        .push(0.0, c(3.0), 100.0)
-        .push(0.0, c(0.4), 200.0);
+        .push(0.0, c(1.5), 100.0)
+        .push(0.0, c(0.2), 200.0);
     b = idle(b, 3);
     marks.push((
         b.clone().build().len(),
         "dribble forward, wait, then the real push",
     ));
     b = b
-        .pull(-20.0, c(1.5), 150.0)
+        .pull(-20.0, c(0.75), 150.0)
         .pause_ms(200.0)
-        .push(0.0, c(0.3), 150.0)
+        .push(0.0, c(0.15), 150.0)
         .pause_ms(300.0)
-        .push(8.0, c(2.2), 100.0)
-        .push(8.0, c(0.6), 150.0);
+        .push(8.0, c(1.1), 100.0)
+        .push(8.0, c(0.3), 150.0);
     marks.push((
         b.clone().build().len(),
         "quick second swing while the ball coasts",
     ));
     b = b
-        .pull(0.0, c(1.5), 150.0)
+        .pull(0.0, c(0.75), 150.0)
         .pause_ms(200.0)
-        .push(-10.0, c(1.5), 100.0)
-        .push(-10.0, c(0.3), 200.0);
+        .push(-10.0, c(0.75), 100.0)
+        .push(-10.0, c(0.15), 200.0);
     b = idle(b, 3);
     marks.push((b.clone().build().len(), "a pull too short to count"));
-    b = b.pull(0.0, c(0.25), 50.0);
+    b = b.pull(0.0, c(0.125), 50.0);
     b = idle(b, 2);
     Fixture {
         name: "wobble_dribble_quick_1000hz",
@@ -192,9 +192,9 @@ fn fixture_1000() -> Fixture {
   "tol_speed_pct": 3,
   "tol_len_in": 0.1,
   "swings": [
-    {"back_dir_deg": 10, "back_len_in": 1.5, "fwd_dir_deg": 0, "fwd_peak_in_s": 30},
-    {"back_dir_deg": -20, "back_len_in": 1.5, "fwd_dir_deg": 8, "fwd_peak_in_s": 22},
-    {"back_dir_deg": 0, "back_len_in": 1.5, "fwd_dir_deg": -10, "fwd_peak_in_s": 15}
+    {"back_dir_deg": 10, "back_len_in": 0.75, "fwd_dir_deg": 0, "fwd_peak_in_s": 15},
+    {"back_dir_deg": -20, "back_len_in": 0.75, "fwd_dir_deg": 8, "fwd_peak_in_s": 11},
+    {"back_dir_deg": 0, "back_len_in": 0.75, "fwd_dir_deg": -10, "fwd_peak_in_s": 7.5}
   ],
   "cancels": ["Dribble", "Short"]
 }

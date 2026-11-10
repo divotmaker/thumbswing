@@ -86,13 +86,13 @@ fn a_controller_gets_the_shots_with_the_club_it_chose() {
     // Two swings: straight at full power, then a pull 20° left and a push 5°
     // right at 75 %.
     let samples = StreamBuilder::new(125.0)
-        .pull(0.0, 600.0, 150.0)
+        .pull(0.0, 300.0, 150.0)
         .pause_ms(300.0)
-        .push(0.0, 1200.0, 100.0)
+        .push(0.0, 600.0, 100.0)
         .pause_ms(2500.0)
-        .pull(20.0, 600.0, 150.0)
+        .pull(20.0, 300.0, 150.0)
         .pause_ms(300.0)
-        .push(5.0, 900.0, 100.0)
+        .push(5.0, 450.0, 100.0)
         .build();
     let rec = synthetic_recording(&samples, &[], 400.0, 125.0);
 

@@ -247,7 +247,7 @@ fn help_lists_every_flag_with_its_default() {
         }
     }
     assert!(text.contains("--full-power-speed X"), "{text}");
-    assert!(text.contains("[default: 30 in/s]"), "{text}");
+    assert!(text.contains("[default: 15 in/s]"), "{text}");
     assert!(
         text.contains("[default: 0.067 × full-power speed]"),
         "{text}"

@@ -4,9 +4,9 @@
   "tol_speed_pct": 3,
   "tol_len_in": 0.1,
   "swings": [
-    {"back_dir_deg": 0, "back_len_in": 1.5, "fwd_dir_deg": 0, "fwd_peak_in_s": 30},
-    {"back_dir_deg": -30, "back_len_in": 1.2, "fwd_dir_deg": 0, "fwd_peak_in_s": 27},
-    {"back_dir_deg": 15, "back_len_in": 1.8, "fwd_dir_deg": -5, "fwd_peak_in_s": 20}
+    {"back_dir_deg": 0, "back_len_in": 0.75, "fwd_dir_deg": 0, "fwd_peak_in_s": 15},
+    {"back_dir_deg": -30, "back_len_in": 0.6, "fwd_dir_deg": 0, "fwd_peak_in_s": 13.5},
+    {"back_dir_deg": 15, "back_len_in": 0.9, "fwd_dir_deg": -5, "fwd_peak_in_s": 10}
   ],
   "cancels": []
 }
