@@ -9,7 +9,7 @@ repository = "https://github.com/divotmaker/thumbswing"
 readme = "README.md"
 keywords = ["golf", "launch-monitor", "trackball", "evdev", "simulator"]
 categories = ["hardware-support", "simulation"]
-exclude = ["CLAUDE.md", ".github/", "rust-toolchain.toml"]
+exclude = [".github/", "rust-toolchain.toml"]
 
 [dependencies]
 thiserror = "2"
