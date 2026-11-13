@@ -10,6 +10,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +41,7 @@ jobs:
   uinput:
     name: Kernel input (uinput)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Runner images without the uinput module cannot run this job.
     continue-on-error: true
     steps:
