@@ -13,7 +13,7 @@ exclude = [".github/", "rust-toolchain.toml"]
 
 [dependencies]
 thiserror = "2"
-# The driver config types (`config`), the `DeviceDriver` impl (`driver`) and
+# The driver config types (`config`), the `FrpDriver` impl (`driver`) and
 # the `thumbswing-frp` binary (`frp`).
 flightrelay = { version = "0.6.0", default-features = false, optional = true }
 # Serde on `Settings`, `Config`, `Thresholds`, `Tuning`, `Club` and `Hand`
@@ -43,7 +43,7 @@ default = []
 # The serde driver config (`Settings` as a `flightrelay` `DriverConfig`),
 # with no device stack: what a settings form or a WebAssembly UI enables.
 config = ["dep:flightrelay", "flightrelay/config", "dep:serde"]
-# `thumbswing::driver`: the `DeviceDriver` impl a host such as flighthook runs.
+# `thumbswing::driver`: the `FrpDriver` impl a host such as flighthook runs.
 driver = ["config", "flightrelay/driver"]
 # The `thumbswing-frp` binary: the driver served over FRP.
 frp = ["driver", "flightrelay/server", "flightrelay/main", "dep:toml", "dep:ctrlc"]

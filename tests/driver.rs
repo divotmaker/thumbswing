@@ -7,9 +7,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
+use flightrelay::driver::testing::TestHost;
 use flightrelay::driver::{
-    Backoff, ConnectCtx, ConnectHost, DeviceDriver, DeviceEvent, DeviceSession, Events, HostFlags,
-    SessionEnd, StatusChange, Stop, TurnHints,
+    Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
 };
 use flightrelay::types::blockers;
 use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey};
@@ -33,21 +33,20 @@ fn two_swings() -> Recording {
     synthetic_recording(&samples, &[], 400.0, 125.0)
 }
 
-/// Polls with no wait, enough times for a fast replay of `rec` to play out
-/// (every poll moves its clock 1 ms).
-fn polls_for(rec: &Recording) -> usize {
+/// Steps enough for a fast replay of `rec` to play out (every step moves its
+/// clock 1 ms).
+fn steps_for(rec: &Recording) -> usize {
     let last_ms = rec.samples().last().map_or(0, |s| s.t_us / 1000);
     usize::try_from(last_ms).unwrap() + 4000
 }
 
-fn play(session: &mut Session, flags: &HostFlags, polls: usize) -> Vec<DeviceEvent> {
-    let mut seen = Vec::new();
-    let mut sink = |e| seen.push(e);
-    let mut out = Events::new(&mut sink, flags);
-    for _ in 0..polls {
-        session.poll(Duration::ZERO, &mut out).unwrap();
+/// Steps `session` `steps` times at the host's instant (a fast replay's
+/// clock is its input's, so the host's does not move) and takes the events.
+fn play(session: &mut Session, host: &mut TestHost, steps: usize) -> Vec<DeviceEvent> {
+    for _ in 0..steps {
+        host.with(|now, out| session.step(now, out)).unwrap();
     }
-    seen
+    host.take()
 }
 
 /// The message bodies: shots and alerts.
@@ -128,9 +127,9 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
         Some("divotmaker")
     );
 
-    let flags = HostFlags::new();
-    flags.set_wants_raw(true); // no wire protocol: still no raw frames
-    let all = play(&mut session, &flags, polls_for(&rec));
+    let mut host = TestHost::new();
+    host.flags.set_wants_raw(true); // no wire protocol: still no raw frames
+    let all = play(&mut session, &mut host, steps_for(&rec));
 
     // The telemetry comes first, before any shot message, then the input
     // is ready: no blockers.
@@ -216,24 +215,22 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
         }
     }
 
-    let mut seen = Vec::new();
-    let mut sink = |e| seen.push(e);
-    session.close(&mut Events::new(&mut sink, &flags)).unwrap();
-    assert_eq!(ready_values(&seen), [false]);
+    host.with(|_, out| session.close(out)).unwrap();
+    assert_eq!(ready_values(&host.take()), [false]);
 }
 
 #[test]
 fn shot_numbers_keep_counting_across_sessions() {
     let rec = two_swings();
     let mut driver = driver();
-    let flags = HostFlags::new();
+    let mut host = TestHost::new();
     let mut keys = Vec::new();
     for _ in 0..2 {
         let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
         keys.extend(shot_keys(&frp(&play(
             &mut session,
-            &flags,
-            polls_for(&rec),
+            &mut host,
+            steps_for(&rec),
         ))));
     }
     assert_eq!(keys, [1, 2, 3, 4]);
@@ -244,17 +241,17 @@ fn a_swing_while_shots_are_held_takes_no_number() {
     let rec = two_swings();
     let mut driver = driver();
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let flags = HostFlags::new();
-    flags.set_shots_allowed(false);
+    let mut host = TestHost::new();
+    host.flags.set_shots_allowed(false);
     // Up to the first swing's end and its cooldown.
-    let held = play(&mut session, &flags, 1500);
+    let held = play(&mut session, &mut host, 1500);
     assert!(shot_keys(&frp(&held)).is_empty(), "{held:?}");
     assert!(
         held.iter()
             .any(|e| matches!(e, DeviceEvent::Log(_, line) if line.contains("holding shots")))
     );
-    flags.set_shots_allowed(true);
-    let rest = play(&mut session, &flags, polls_for(&rec));
+    host.flags.set_shots_allowed(true);
+    let rest = play(&mut session, &mut host, steps_for(&rec));
     assert_eq!(shot_keys(&frp(&rest)), [1]);
 }
 
@@ -263,8 +260,8 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
     let rec = two_swings();
     let mut driver = driver();
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let flags = HostFlags::new();
-    let start = telemetry(&play(&mut session, &flags, 1));
+    let mut host = TestHost::new();
+    let start = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("7I", "rh")
@@ -278,7 +275,7 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
                 .with_handedness(Handedness::Right),
         )
         .unwrap();
-    assert!(telemetry(&play(&mut session, &flags, 1)).is_empty());
+    assert!(telemetry(&play(&mut session, &mut host, 1)).is_empty());
 
     // A putt is the putter selected; the mode needs nothing.
     session
@@ -288,10 +285,10 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
                 .with_club(flightrelay::Club::Putter),
         )
         .unwrap();
-    let after = telemetry(&play(&mut session, &flags, 1));
+    let after = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(after["profile"], "PT");
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
-    let rest = play(&mut session, &flags, polls_for(&rec));
+    let rest = play(&mut session, &mut host, steps_for(&rec));
     let rest = frp(&rest);
     let launches: Vec<_> = rest
         .iter()
@@ -319,7 +316,7 @@ fn tuning_and_thresholds_apply_to_a_running_session() {
     driver.apply_config(&slower);
     assert_eq!(driver.config(), &slower);
 
-    let events = play(&mut session, &HostFlags::new(), polls_for(&rec));
+    let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
     let events = frp(&events);
     assert!((session.client().tuning().max_club_speed - 50.0).abs() < f64::EPSILON);
     assert_eq!(session.client().config().thresholds.gap_ms, 60);
@@ -351,7 +348,7 @@ fn every_fixture_plays_through_the_driver() {
         settings.config.report_limit = rec.header.report_limit;
         let mut driver = Thumbswing::new(settings).unwrap();
         let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-        let events = play(&mut session, &HostFlags::new(), polls_for(&rec));
+        let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
         let keys = shot_keys(&frp(&events));
         let want: Vec<u32> = (1..=u32::try_from(expect.swings.len()).unwrap()).collect();
         assert_eq!(keys, want, "{}", path.display());
@@ -415,36 +412,23 @@ fn an_unplugged_input_reports_not_ready_until_it_is_back() {
     };
     let mut driver = driver();
     let mut session = driver.connect_with(input, &TurnHints::default());
-    let events = play(&mut session, &HostFlags::new(), 200);
+    let events = play(&mut session, &mut TestHost::new(), 200);
     assert_eq!(ready_values(&events), [true, false, true]);
-}
-
-struct Host(TurnHints);
-
-impl ConnectHost for Host {
-    fn tick(&mut self) {}
-    fn hints(&self) -> &TurnHints {
-        &self.0
-    }
 }
 
 #[test]
 fn connect_serves_a_given_input_once_and_honors_stop() {
     let rec = two_swings();
-    let flags = HostFlags::new();
-    let mut seen = Vec::new();
-    let mut sink = |e| seen.push(e);
-    let stop = Stop::new();
-    let mut host = Host(TurnHints::default().with_club(flightrelay::Club::PitchingWedge));
+    let mut host = TestHost::new()
+        .with_hints(TurnHints::default().with_club(flightrelay::Club::PitchingWedge));
     let mut driver =
         Thumbswing::with_input(Settings::default(), Replay::new(&rec, Pace::Fast)).unwrap();
 
-    let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
-    let session = driver.connect(&mut ctx).unwrap();
+    let session = host.connect(&mut driver).unwrap();
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
-    assert!(matches!(driver.connect(&mut ctx), Err(Error::NotFound(_))));
-    stop.stop();
-    assert!(matches!(driver.connect(&mut ctx), Err(Error::Stopped)));
+    assert!(matches!(host.connect(&mut driver), Err(Error::NotFound(_))));
+    host.stop().stop();
+    assert!(matches!(host.connect(&mut driver), Err(Error::Stopped)));
 
     // A served input is not reconnected.
     let mut backoff = Backoff::default();
@@ -454,24 +438,25 @@ fn connect_serves_a_given_input_once_and_honors_stop() {
         connected_for: Some(Duration::from_secs(1)),
         attempts: 0,
     };
-    let mut alerts = Vec::new();
-    let mut sink = |e| {
-        if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
-            alerts.push(alert.severity);
-        }
-    };
+    host.take();
     assert_eq!(
-        driver.retry_delay(&ended, &mut backoff, &mut Events::new(&mut sink, &flags)),
+        host.with(|_, out| driver.retry_delay(&ended, &mut backoff, out)),
         None
     );
+    let alerts: Vec<_> = host
+        .take()
+        .into_iter()
+        .filter_map(|e| match e {
+            DeviceEvent::Frp(FrpBody::BusAlert(alert)) => Some(alert.severity),
+            _ => None,
+        })
+        .collect();
     assert_eq!(alerts, [Severity::Error]);
 }
 
 #[test]
 fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
-    let flags = HostFlags::new();
-    let mut sink = |_| {};
-    let mut out = Events::new(&mut sink, &flags);
+    let mut host = TestHost::new();
     let mut driver = driver();
     let mut backoff = Backoff::default();
     let failed = |e| SessionEnd {
@@ -480,14 +465,14 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
         attempts: 1,
     };
     assert_eq!(
-        driver.retry_delay(&failed(&Error::Unsupported), &mut backoff, &mut out),
+        host.with(|_, out| driver.retry_delay(&failed(&Error::Unsupported), &mut backoff, out)),
         None
     );
     let busy = Error::Busy {
         path: "/dev/input/event5".into(),
     };
     assert_eq!(
-        driver.retry_delay(&failed(&busy), &mut backoff, &mut out),
+        host.with(|_, out| driver.retry_delay(&failed(&busy), &mut backoff, out)),
         Some(Duration::from_secs(1))
     );
     assert_eq!(Thumbswing::STOP_WAIT, Duration::from_secs(1));
@@ -504,11 +489,11 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
         ..Settings::default()
     };
     let mut driver = Thumbswing::new(settings.clone()).unwrap();
-    let flags = HostFlags::new();
+    let mut host = TestHost::new();
 
     // No hints: the setting.
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let start = telemetry(&play(&mut session, &flags, 1));
+    let start = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("DR", "lh")
@@ -518,7 +503,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     // only the changed key is sent.
     settings.club = thumbswing::Club::Wood3;
     driver.apply_config(&settings);
-    let changed = telemetry(&play(&mut session, &flags, 1));
+    let changed = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(changed.len(), 1, "{changed:?}");
     assert_eq!(changed["profile"], "3W");
 
@@ -526,17 +511,17 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     session
         .hints(&TurnHints::default().with_club(flightrelay::Club::PitchingWedge))
         .unwrap();
-    let after = telemetry(&play(&mut session, &flags, 1));
+    let after = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(after.len(), 1, "only the club changed: {after:?}");
     assert_eq!(after["profile"], "PW");
     settings.club = thumbswing::Club::Iron5;
     driver.apply_config(&settings);
-    assert!(telemetry(&play(&mut session, &flags, 1)).is_empty());
+    assert!(telemetry(&play(&mut session, &mut host, 1)).is_empty());
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
     // The hand still follows the setting: the turn names no hand.
     settings.hand = thumbswing::Hand::Right;
     driver.apply_config(&settings);
-    let hand = telemetry(&play(&mut session, &flags, 1));
+    let hand = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(hand.len(), 1, "{hand:?}");
     assert_eq!(hand["handed"], "rh");
 
@@ -544,7 +529,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     session
         .hints(&TurnHints::default().with_handedness(Handedness::Right))
         .unwrap();
-    let dropped = telemetry(&play(&mut session, &flags, 1));
+    let dropped = telemetry(&play(&mut session, &mut host, 1));
     assert_eq!(dropped.len(), 1, "only the club changed: {dropped:?}");
     assert_eq!(dropped["profile"], "5I");
     assert_eq!(session.client().club(), thumbswing::Club::Iron5);
@@ -575,30 +560,20 @@ fn the_putting_mode_selects_the_putter_whatever_the_club() {
 }
 
 #[test]
-fn a_fast_replay_plays_without_sleeping() {
+fn a_fast_replay_steps_without_idling_until_it_has_played() {
     let rec = two_swings();
     let mut driver = driver();
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let flags = HostFlags::new();
-    let mut seen = Vec::new();
-    let started = std::time::Instant::now();
-    // The recording is 3.6 s long, plus 3 s for the last swing to settle;
-    // played without sleeping it takes a fraction of a second.
-    while started.elapsed() < Duration::from_secs(3) && shot_keys(&frp(&seen)).len() < 2 {
-        let mut sink = |e| seen.push(e);
-        session
-            .poll(
-                Duration::from_millis(100),
-                &mut Events::new(&mut sink, &flags),
-            )
-            .unwrap();
+    let mut host = TestHost::new();
+    let mut steps = 0;
+    // The recording is 3.6 s long, plus 3 s for the last swing to settle: the
+    // host steps it again at once until then, and may wait once it has played.
+    while host.with(|now, out| session.step(now, out)).unwrap() == Activity::Active {
+        steps += 1;
+        assert!(steps <= steps_for(&rec), "the replay never finished");
     }
-    assert_eq!(shot_keys(&frp(&seen)), [1, 2]);
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(steps > 6000, "{steps}");
+    assert_eq!(shot_keys(&frp(&host.take())), [1, 2]);
 }
 
 /// Every error that carries a device path or link name, with the texts
@@ -624,21 +599,23 @@ fn errors_with_paths() -> Vec<Error> {
 }
 
 fn alerts_for(driver: &mut Thumbswing, error: &Error, backoff: &mut Backoff) -> Vec<String> {
-    let flags = HostFlags::new();
-    flags.set_min_level(flightrelay::driver::Level::Debug);
+    let mut host = TestHost::new();
+    host.flags.set_min_level(flightrelay::driver::Level::Debug);
     let mut alerts = Vec::new();
     let mut debug = Vec::new();
-    let mut sink = |e| match e {
-        DeviceEvent::Frp(FrpBody::BusAlert(alert)) => alerts.push(alert.message),
-        DeviceEvent::Log(flightrelay::driver::Level::Debug, line) => debug.push(line),
-        _ => {}
-    };
     let ended = SessionEnd {
         error: Some(error),
         connected_for: None,
         attempts: 1,
     };
-    let delay = driver.retry_delay(&ended, backoff, &mut Events::new(&mut sink, &flags));
+    let delay = host.with(|_, out| driver.retry_delay(&ended, backoff, out));
+    for e in host.take() {
+        match e {
+            DeviceEvent::Frp(FrpBody::BusAlert(alert)) => alerts.push(alert.message),
+            DeviceEvent::Log(flightrelay::driver::Level::Debug, line) => debug.push(line),
+            _ => {}
+        }
+    }
     assert!(delay.is_some(), "{error}: retried");
     assert!(
         debug.iter().any(|l| l.contains(&error.to_string())),
@@ -708,38 +685,28 @@ fn a_choice_left_to_the_user_is_alerted_once_per_outage() {
         }
     })
     .unwrap();
-    let flags = HostFlags::new();
-    let stop = Stop::new();
-    let mut host = Host(TurnHints::default());
+    let mut host = TestHost::new();
     let mut backoff = Backoff::default();
-    let mut alerts = Vec::new();
     let mut delays = Vec::new();
     for _ in 0..9 {
-        let mut sink = |e| {
-            if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
-                alerts.push(alert.message);
-            }
-        };
-        let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
-        let ended = driver.connect(&mut ctx).err();
+        let ended = host.connect(&mut driver).err();
         if let Some(error) = ended {
-            let mut sink = |e| {
-                if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
-                    alerts.push(alert.message);
-                }
-            };
             let end = SessionEnd {
                 error: Some(&error),
                 connected_for: None,
                 attempts: 1,
             };
-            delays.push(driver.retry_delay(
-                &end,
-                &mut backoff,
-                &mut Events::new(&mut sink, &flags),
-            ));
+            delays.push(host.with(|_, out| driver.retry_delay(&end, &mut backoff, out)));
         }
     }
+    let alerts: Vec<String> = host
+        .take()
+        .into_iter()
+        .filter_map(|e| match e {
+            DeviceEvent::Frp(FrpBody::BusAlert(alert)) => Some(alert.message),
+            _ => None,
+        })
+        .collect();
     assert!(
         delays.iter().all(Option::is_some),
         "always retried: {delays:?}"
@@ -820,12 +787,7 @@ fn gone_at(node: &str, by_id: &[&str], name: &str) -> Box<dyn Input + Send> {
 
 /// Connects `driver` once, through its opener.
 fn connect(driver: &mut Thumbswing) -> Result<Session, Error> {
-    let flags = HostFlags::new();
-    let stop = Stop::new();
-    let mut host = Host(TurnHints::default());
-    let mut sink = |_| {};
-    let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
-    driver.connect(&mut ctx)
+    TestHost::new().connect(driver)
 }
 
 #[test]
@@ -844,13 +806,9 @@ fn with_no_device_named_an_unplug_chooses_the_device_again() {
         }
     })
     .unwrap();
-    let flags = HostFlags::new();
-    let stop = Stop::new();
-    let mut host = Host(TurnHints::default());
-    let mut sink = |_| {};
-    let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
-    let mut session = driver.connect(&mut ctx).unwrap();
-    let events = play(&mut session, &flags, 200);
+    let mut host = TestHost::new();
+    let mut session = host.connect(&mut driver).unwrap();
+    let events = play(&mut session, &mut host, 200);
     assert_eq!(ready_values(&events)[..3], [true, false, true]);
     let opened = opened.lock().unwrap();
     assert!(opened.len() >= 3, "{opened:?}");
@@ -876,13 +834,9 @@ fn a_named_device_is_reopened_by_its_name_not_chosen_again() {
         Ok(gone("Ball"))
     })
     .unwrap();
-    let flags = HostFlags::new();
-    let stop = Stop::new();
-    let mut host = Host(TurnHints::default());
-    let mut sink = |_| {};
-    let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
-    let mut session = driver.connect(&mut ctx).unwrap();
-    let events = play(&mut session, &flags, 200);
+    let mut host = TestHost::new();
+    let mut session = host.connect(&mut driver).unwrap();
+    let events = play(&mut session, &mut host, 200);
     assert_eq!(ready_values(&events), [true, false]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
@@ -907,7 +861,7 @@ fn the_device_id_is_the_by_id_link_name() {
     let identity = session.identity();
     assert_eq!(identity.device, LINK_NAME, "the first link, file name only");
     assert_eq!(identity.label(), "thumbswing (Example Trackball)");
-    let events = play(&mut session, &HostFlags::new(), 1);
+    let events = play(&mut session, &mut TestHost::new(), 1);
     assert_eq!(telemetry(&events)["input"], "Example Trackball");
 }
 
@@ -948,7 +902,7 @@ fn the_device_id_is_the_same_after_a_replug() {
     .unwrap();
     let mut session = connect(&mut driver).unwrap();
     assert_eq!(session.identity().device, LINK_NAME);
-    let events = play(&mut session, &HostFlags::new(), 200);
+    let events = play(&mut session, &mut TestHost::new(), 200);
     assert_eq!(ready_values(&events)[..3], [true, false, true]);
     let reopened = opened.load(std::sync::atomic::Ordering::SeqCst);
     assert!(reopened >= 2, "{reopened}");

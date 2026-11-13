@@ -346,7 +346,7 @@ Features:
   `DriverConfig`. No device stack: a settings form, including one built for
   WebAssembly, can use it.
 - **`driver`** — `thumbswing::driver::Thumbswing`, a flightrelay
-  `DeviceDriver`, for a host that runs launch monitors (implies `config`).
+  `FrpDriver`, for a host that runs launch monitors (implies `config`).
 - **`frp`** — the `thumbswing-frp` binary (implies `driver`).
 - **`testing`** — `thumbswing::testing`: synthetic swing streams, a manual
   clock and fixture expectations, for tests of code that uses the crate.
@@ -386,7 +386,7 @@ cargo test --features frp,testing
 - The driver's session on synthetic streams and the fixtures: status and
   telemetry, each shot once, the club and hand from the settings and from the
   turn, a turn that drops a club, the
-  putting mode, held shots, live tuning, a fast replay without sleeps, an
+  putting mode, held shots, live tuning, a fast replay stepped without idling, an
   unplugged input, choosing the device again after an unplug, alerts without
   device paths and alerted once per outage (`tests/driver.rs`).
 - The settings as a driver config: defaults that write nothing, nested and

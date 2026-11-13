@@ -3,9 +3,9 @@
 //!
 //! Requires the `driver` feature. A host (the `thumbswing-frp` binary, a golf
 //! automation bus) builds the driver from [`Settings`] with
-//! [`DeviceDriver::new`], which validates them and opens nothing, then calls
-//! [`connect`](DeviceDriver::connect) to open the input and
-//! [`poll`](DeviceSession::poll) to turn swings into FRP messages: the
+//! [`FrpDriver::new`], which validates them and opens nothing, then calls
+//! [`connect`](FrpDriver::connect) to open the input and
+//! [`step`](FrpSession::step) to turn swings into FRP messages: the
 //! driver is a launch monitor actor on the bus.
 //!
 //! Every value this device sends is synthesized from the swing, so its
@@ -61,8 +61,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flightrelay::config::{ConfigError, DriverConfig};
 use flightrelay::driver::{
-    Backoff, ConnectCtx, DeviceDriver, DeviceIdentity, DeviceSession, DriverInfo, Events, Level,
-    Live, NoAction, SessionEnd, ShotIds, TurnHints,
+    Activity, Backoff, ConnectCtx, DeviceIdentity, DriverInfo, Events, FrpDriver, FrpSession,
+    Level, Live, NoAction, SessionEnd, ShotIds, TurnHints,
 };
 use flightrelay::{Handedness, Mode, Severity, Source};
 
@@ -86,9 +86,6 @@ pub const MODEL: &str = "thumbswing trackball";
 /// Where `thumbswing-frp` listens by default: port 5881, so it runs next to a
 /// hub on 5880.
 pub const DEFAULT_TARGET: &str = "0.0.0.0:5881";
-
-/// How long a poll sleeps when the input has nothing.
-const IDLE_SLEEP: Duration = Duration::from_millis(2);
 
 /// An input a driver serves.
 type BoxedInput = Box<dyn Input + Send>;
@@ -159,7 +156,7 @@ impl Thumbswing {
     }
 
     /// A session over `input`, opening nothing, with the club and hand from
-    /// `hints`: what [`connect`](DeviceDriver::connect) returns after it has
+    /// `hints`: what [`connect`](FrpDriver::connect) returns after it has
     /// opened the device, for tests that feed the session a synthetic stream
     /// or a recording.
     #[cfg(feature = "testing")]
@@ -172,7 +169,7 @@ impl Thumbswing {
         self.session(Box::new(input), *hints)
     }
 
-    /// A driver whose [`connect`](DeviceDriver::connect) gets its inputs from
+    /// A driver whose [`connect`](FrpDriver::connect) gets its inputs from
     /// `open` instead of the evdev devices: `open` is called with the
     /// [`device`](Settings::device) value and the grab, for every connect
     /// and, with `device` unset, for every reopen after an unplug. For tests
@@ -301,7 +298,7 @@ impl Input for Reselect {
     }
 }
 
-impl DeviceDriver for Thumbswing {
+impl FrpDriver for Thumbswing {
     type Config = Settings;
     type Error = Error;
     type Action = NoAction;
@@ -430,7 +427,7 @@ pub struct Session {
     profile_due: bool,
     /// Whether the hand changed since the last telemetry.
     handed_due: bool,
-    /// Log lines from `hints`, which has no event sink, for the next poll.
+    /// Log lines from `hints`, which has no event sink, for the next step.
     notes: Vec<String>,
 }
 
@@ -524,7 +521,7 @@ impl Session {
     }
 
     /// Take the club, hand, thresholds and tuning the driver was given since
-    /// the last poll.
+    /// the last step.
     fn follow_live_settings(&mut self) -> Result<(), Error> {
         let live = self.live.get();
         if live.club != self.applied.club || live.hand != self.applied.hand {
@@ -618,29 +615,24 @@ impl Session {
     }
 }
 
-impl DeviceSession for Session {
+impl FrpSession for Session {
     type Driver = Thumbswing;
 
-    fn poll(&mut self, timeout: Duration, out: &mut Events<'_>) -> Result<(), Error> {
+    fn step(&mut self, _now: Instant, out: &mut Events<'_>) -> Result<Activity, Error> {
+        // The input's clock is the session's clock: a swing is timed by its
+        // samples, so `now` is not read.
         for note in self.notes.drain(..) {
             out.log(Level::Info, note);
         }
         self.follow_live_settings()?;
         self.telemetry(out);
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(event) = self.client.poll()? {
-                self.handle(event, out);
-            } else if self.client.input().paced() {
-                let left = deadline.saturating_duration_since(Instant::now());
-                if left.is_zero() {
-                    return Ok(());
-                }
-                std::thread::sleep(left.min(IDLE_SLEEP));
-            }
-            if Instant::now() >= deadline {
-                return Ok(());
-            }
+        if let Some(event) = self.client.poll()? {
+            self.handle(event, out);
+            Ok(Activity::Active)
+        } else if self.client.input().paced() {
+            Ok(Activity::Idle)
+        } else {
+            Ok(Activity::Active)
         }
     }
 
