@@ -47,7 +47,7 @@ pull toward the player's left gives `b > 0`), `δ = b − f` and `p` the power:
 **Curve sense.** In the arcade sense (the default) you push toward where the
 ball should start and pull back from where it should finish: the ball curves
 toward the backswing line. Pull back to the left and push straight, and the
-ball starts straight and bends right. The `club_path` sent downstream is
+ball starts straight and bends right. The club data (`shot.club`) sent downstream is
 always physically consistent with the flight, so in this sense it is the
 backswing reflected about the push; the raw stroke directions are shown next
 to path and face so it is clear what the hands did. The physical sense makes
@@ -163,12 +163,15 @@ thumbswing-frp [--config <path>] [--target <listen-addr | ws://host:port/frp>]
 Named flags only, in any order:
 
 - `--config <path>`: a TOML file with the settings at the top level (the keys
-  under Settings below).
+  under Settings below) and the bus settings in an `[frp]` table: `actor_id`,
+  the launch monitor's id on the bus, generated on the first run and written
+  into the file so it stays the same (without `--config` it lasts for the
+  run).
 - `--set key=value` (repeatable): one setting over the file, e.g.
   `--set cpi=800 --set tuning.curve_sense=physical`. A key that does not
   exist is refused.
 - `--target`: an address to listen on (default `0.0.0.0:5881`, so it runs
-  next to a controller on 5880), or a `ws://` URL to dial a host.
+  next to a hub on 5880), or a `ws://` URL to dial a hub.
 - `--log`: the lowest log level to print (default `info`).
 - `--help`: usage, then every setting with its default.
 
@@ -176,41 +179,44 @@ A bad flag, file, key or value exits with status 2 before the device is
 opened. Ctrl-C closes the device (releasing the grab) and exits 0. Off Linux
 the device cannot be opened, and the program says so once and exits 1.
 
-Several controllers can connect at once, and each gets every shot. The club
-and the player's hand start as the `club` and `hand` settings (the 7-iron and
-right-handed by default, e.g. `--set club=DR --set hand=lh`); a club or hand
-from a controller's `set_detection_mode` replaces them, and its putting mode
+The program is a launch monitor actor on the FRP bus. Several peers (a
+simulator, a hub) can connect at once, and each gets every message. The club
+and the player's hand come from each `golfer.turn`: its club and handedness
+when it gives them, else the `club` and `hand` settings (the 7-iron and
+right-handed by default, e.g. `--set club=DR --set hand=lh`); the putting mode
 selects the putter whatever the club. When the trackball is unplugged the
-program reports `ready=false`, reopens it when it is back, and goes on; with
-`device` unset it chooses the device again, so it is found under a new node
-too. When the device cannot be opened, the controllers get an alert saying
-what to do (pick one with `device`, fix the permissions, …), without device
-paths, and the program keeps trying with a growing delay; a choice only the
-user can make is alerted once until the device opens.
+program raises the `not_armed` blocker, reopens the device when it is back,
+and goes on; with `device` unset it chooses the device again, so it is found
+under a new node too. When the device cannot be opened, the bus gets an alert
+saying what to do (pick one with `device`, fix the permissions, …), without
+device paths, and the program keeps trying with a growing delay; a choice
+only the user can make is alerted once until the device opens.
 
-What the controllers receive (FRP 0.2.0):
+What goes on the bus (FRP 0.3.0):
 
-- `device_telemetry` before the first shot: `manufacturer: divotmaker`,
-  `model: thumbswing trackball`, the crate version as `firmware`,
-  `source: virtual` (every value is synthesized), and the keys `ready`,
-  `synthetic = "true"`, `input` (the device name), `cpi`, `profile` (the
-  club) and `handed`; after that only the keys that change. The FRP `device`
-  id is the device's `/dev/input/by-id` link name (the file name only, e.g.
-  `usb-Example_Trackball-event-mouse`), the same across reconnects and
-  replugs; a device without a `by-id` link is known by its name. The label
-  shows the device name.
-- Each shot: `shot_trigger` (with the time of the swing's last report, the
-  end of the push) → `launch` (speed,
-  launch angle and direction, both spin pairs; a putt has total spin 0 and
-  no axis) → `club_path` (club speed, path, face, attack angle, dynamic loft,
-  smash) → `shot_finished`. There is no `flight_result`: carry and roll are
-  left to the simulator.
+- The actor's `bus.actor`, with the role `launch_monitor`, the `device` block
+  `manufacturer: divotmaker`, `model: thumbswing trackball`, the crate version
+  as `firmware` and `source: virtual` (every value is synthesized), the
+  blockers (`not_armed` until the trackball is open and reading, empty while
+  it is), and the telemetry keys `synthetic = "true"`, `input` (the device
+  name), `cpi`, `profile` (the club) and `handed`. The device's
+  `/dev/input/by-id` link name (the file name only, e.g.
+  `usb-Example_Trackball-event-mouse`, or the device name when it has no such
+  link) is the device id in the program's own log; it never goes on the bus.
+- Each shot: `shot.trigger` (with the time of the swing's last report, the
+  end of the push) → `shot.launch` (speed, launch angle and direction, both
+  spin pairs; a putt has total spin 0 and no axis) → `shot.club` (club speed,
+  path, face, attack angle, dynamic loft, smash) → `shot.finished`. There is
+  no `shot.flight`: carry and roll are left to the simulator or a flight
+  model.
 
 Development only: `--replay FILE` serves a recording instead of a device,
-starting when the first controller connects (`cpi` and `report_limit`
-default to the recording's header); `--fast` replays it as fast as it can be
-processed instead of at the recorded timing, and `--exit-after-replay` quits
-when it is done.
+starting when the first peer connects (`cpi` and `report_limit` default to
+the recording's header); `--fast` replays it as fast as it can be processed
+instead of at the recorded timing, and `--exit-after-replay` quits when it is
+done. Its actor id is `frp.actor_id` from the `--config` file (a new one is
+saved there when it has none, as for the device mode), else a new one for the
+run.
 
 ## Settings
 
@@ -227,8 +233,8 @@ full 15.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 |
 | Key | `monitor` flag | Default | Unit | What it sets |
 |---|---|---|---|---|
 | `device` | `--device` | unset | | the input; unset: the only trackball or mouse found |
-| `club` | `--club CODE` | 7I | FRP code | the club until a controller names one (`DR`, `3W`, `7I`, `PW`, `PT`, …) |
-| `hand` | `--hand RH\|LH` | rh | `rh`/`lh` | the player's hand until a controller names one |
+| `club` | `--club CODE` | 7I | FRP code | the club while the turn names none (`DR`, `3W`, `7I`, `PW`, `PT`, …) |
+| `hand` | `--hand RH\|LH` | rh | `rh`/`lh` | the player's hand while the turn names none |
 | `cpi` | `--cpi N` | 400 | counts/in | counts per inch of ball surface travel |
 | `report_limit` | `--report-limit N` | 127 | counts | largest `\|dx\|`/`\|dy\|` one report carries: 127, 2047 or 32767 |
 | `grab` | `--no-grab` | true | | exclusive grab, so the desktop cursor does not follow the ball |
@@ -279,7 +285,7 @@ adapts them all to the device. With `monitor --replay`, `--cpi` and
 `--report-limit` default to the recording's header.
 
 The club, the hand, the thresholds and the tuning apply to a running device
-at once (the club and hand only while no controller has named one); a change
+at once (the club and hand while the turn names none); a change
 of `device`, `cpi`, `report_limit` or `grab` reopens it.
 
 ## Devices and saturation
@@ -377,16 +383,17 @@ cargo test --features frp,testing
   the expected swings. The two fixtures there now are **generated
   synthetically** by `thumbswing::testing` (their headers say so), not
   recorded from hardware; recordings from real devices are added next to them.
-- The driver's session on synthetic streams and the fixtures: telemetry,
-  each shot once, the club and hand from the settings and from the host, the
+- The driver's session on synthetic streams and the fixtures: status and
+  telemetry, each shot once, the club and hand from the settings and from the
+  turn, a turn that drops a club, the
   putting mode, held shots, live tuning, a fast replay without sleeps, an
   unplugged input, choosing the device again after an unplug, alerts without
   device paths and alerted once per outage (`tests/driver.rs`).
 - The settings as a driver config: defaults that write nothing, nested and
   optional keys, the club and hand, errors that name the field, and
   `thumbswing-frp --set` refusing a bad club or hand (`tests/settings.rs`).
-- FRP end to end in one process: the driver served to a controller that
-  picks a club and receives the shots (`tests/frp.rs`).
+- FRP end to end in one process: the driver served to a peer that publishes
+  a `golfer.turn` and receives the actor and the shots (`tests/frp.rs`).
 - The command line of `monitor`: defaults, every settings flag, invalid
   values, the refusal to guess between several devices, and the flag ranges
   against `Settings::validate` (`tests/cli.rs`).

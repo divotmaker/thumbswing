@@ -8,10 +8,11 @@ use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
 use flightrelay::driver::{
-    Backoff, ConnectCtx, ConnectHost, DeviceCommand, DeviceDriver, DeviceEvent, DeviceSession,
-    Events, HostFlags, SessionEnd, Stop,
+    Backoff, ConnectCtx, ConnectHost, DeviceDriver, DeviceEvent, DeviceSession, Events, HostFlags,
+    SessionEnd, StatusChange, Stop, TurnHints,
 };
-use flightrelay::{FrpEvent, Handedness, Severity, ShotKey};
+use flightrelay::types::blockers;
+use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey};
 use thumbswing::driver::{Session, Thumbswing};
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::testing::{StreamBuilder, synthetic_recording};
@@ -49,7 +50,8 @@ fn play(session: &mut Session, flags: &HostFlags, polls: usize) -> Vec<DeviceEve
     seen
 }
 
-fn frp(events: &[DeviceEvent]) -> Vec<&FrpEvent> {
+/// The message bodies: shots and alerts.
+fn frp(events: &[DeviceEvent]) -> Vec<&FrpBody> {
     events
         .iter()
         .filter_map(|e| match e {
@@ -59,25 +61,46 @@ fn frp(events: &[DeviceEvent]) -> Vec<&FrpEvent> {
         .collect()
 }
 
-/// Every telemetry key in order, the later value winning.
-fn telemetry(events: &[&FrpEvent]) -> HashMap<String, String> {
+/// Every telemetry key of the status changes in order, the later value
+/// winning.
+fn telemetry(events: &[DeviceEvent]) -> HashMap<String, String> {
     let mut all = HashMap::new();
     for e in events {
-        if let FrpEvent::DeviceTelemetry {
-            telemetry: Some(t), ..
-        } = e
-        {
-            all.extend(t.clone());
+        if let DeviceEvent::StatusChange(StatusChange::Telemetry(pairs)) = e {
+            for (key, value) in pairs {
+                match value {
+                    Some(value) => all.insert(key.clone(), value.clone()),
+                    None => all.remove(key),
+                };
+            }
         }
     }
     all
 }
 
-fn shot_keys(events: &[&FrpEvent]) -> Vec<u32> {
+/// Each change of the blockers, as ready (none) or not (`not_armed`).
+fn ready_values(events: &[DeviceEvent]) -> Vec<bool> {
     events
         .iter()
         .filter_map(|e| match e {
-            FrpEvent::ShotTrigger { key, .. } => Some(key.shot_number),
+            DeviceEvent::StatusChange(StatusChange::Blockers(list)) => Some(list),
+            _ => None,
+        })
+        .map(|list| {
+            assert!(
+                list.is_empty() || list == &[blockers::NOT_ARMED.to_owned()],
+                "{list:?}"
+            );
+            list.is_empty()
+        })
+        .collect()
+}
+
+fn shot_keys(events: &[&FrpBody]) -> Vec<u32> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            FrpBody::ShotTrigger(t) => Some(t.key.shot_number),
             _ => None,
         })
         .collect()
@@ -88,13 +111,13 @@ fn driver() -> Thumbswing {
 }
 
 #[test]
-fn a_session_sends_telemetry_then_each_shot_once_with_the_latched_club() {
+fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     let rec = two_swings();
     let mut driver = driver();
-    let latched = DeviceCommand::default()
+    let hints = TurnHints::default()
         .with_club(flightrelay::Club::Driver)
-        .with_handed(Handedness::Left);
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &latched);
+        .with_handedness(Handedness::Left);
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &hints);
     assert_eq!(session.identity().device, "synthetic trackball");
     assert_eq!(
         session.identity().model.as_deref(),
@@ -107,41 +130,46 @@ fn a_session_sends_telemetry_then_each_shot_once_with_the_latched_club() {
 
     let flags = HostFlags::new();
     flags.set_wants_raw(true); // no wire protocol: still no raw frames
-    let events = play(&mut session, &flags, polls_for(&rec));
-    let events = frp(&events);
+    let all = play(&mut session, &flags, polls_for(&rec));
 
-    // Telemetry comes first, before any shot event.
-    let FrpEvent::DeviceTelemetry {
-        telemetry: Some(first),
-        source,
-        ..
-    } = events[0]
-    else {
-        panic!("{:?}", events[0]);
+    // The telemetry comes first, before any shot message, then the input
+    // is ready: no blockers.
+    let DeviceEvent::StatusChange(StatusChange::Telemetry(_)) = &all[0] else {
+        panic!("{:?}", all[0]);
     };
-    assert_eq!(*source, None, "the host stamps source");
+    let first = telemetry(&all[..1]);
     assert_eq!(first["synthetic"], "true");
     assert_eq!(first["input"], "synthetic trackball");
     assert_eq!(first["cpi"], "400");
     assert_eq!(first["profile"], "DR");
     assert_eq!(first["handed"], "lh");
-    assert_eq!(telemetry(&events)["ready"], "true");
+    assert_eq!(ready_values(&all), [true]);
+    let first_shot = all
+        .iter()
+        .position(|e| matches!(e, DeviceEvent::Frp(FrpBody::ShotTrigger(_))))
+        .unwrap();
+    assert_eq!(
+        ready_values(&all[..first_shot]),
+        [true],
+        "ready before the first shot"
+    );
 
+    let events = frp(&all);
     assert!(
         events.iter().all(|e| !matches!(
             e,
-            FrpEvent::RawFrame(_) | FrpEvent::FlightResult { .. } | FrpEvent::FaceImpact { .. }
+            FrpBody::ShotRaw(_) | FrpBody::ShotFlight(_) | FrpBody::ShotImpact(_)
         )),
         "{events:?}"
     );
 
-    // Each shot: trigger (with the time) → launch → club_path → finished.
-    let shots: Vec<&[&FrpEvent]> = events
-        .split_inclusive(|e| matches!(e, FrpEvent::ShotFinished { .. }))
+    // Each shot: trigger (with the time) → launch → club → finished.
+    let shots: Vec<&[&FrpBody]> = events
+        .split_inclusive(|e| matches!(e, FrpBody::ShotFinished(_)))
         .filter_map(|chunk| {
             let start = chunk
                 .iter()
-                .position(|e| matches!(e, FrpEvent::ShotTrigger { .. }))?;
+                .position(|e| matches!(e, FrpBody::ShotTrigger(_)))?;
             Some(&chunk[start..])
         })
         .collect();
@@ -149,15 +177,16 @@ fn a_session_sends_telemetry_then_each_shot_once_with_the_latched_club() {
     let mut first_key: Option<ShotKey> = None;
     for (i, shot) in shots.iter().enumerate() {
         let [
-            FrpEvent::ShotTrigger { key, timestamp },
-            FrpEvent::Launch { key: k1, launch },
-            FrpEvent::ClubPath { key: k2, club },
-            FrpEvent::ShotFinished { key: k3 },
+            FrpBody::ShotTrigger(trigger),
+            FrpBody::ShotLaunch(l),
+            FrpBody::ShotClub(c),
+            FrpBody::ShotFinished(f),
         ] = shot
         else {
             panic!("{shot:?}");
         };
-        assert!(k1 == key && k2 == key && k3 == key);
+        let (key, timestamp, launch, club) = (&trigger.key, trigger.timestamp, &l.launch, &c.club);
+        assert!(&l.key == key && &c.key == key && &f.key == key);
         assert_eq!(key.shot_number as usize, i + 1);
         assert!(timestamp.is_some_and(|t| t > 1_600_000_000_000));
         if let Some(first) = &first_key {
@@ -190,7 +219,7 @@ fn a_session_sends_telemetry_then_each_shot_once_with_the_latched_club() {
     let mut seen = Vec::new();
     let mut sink = |e| seen.push(e);
     session.close(&mut Events::new(&mut sink, &flags)).unwrap();
-    assert_eq!(telemetry(&frp(&seen))["ready"], "false");
+    assert_eq!(ready_values(&seen), [false]);
 }
 
 #[test]
@@ -200,8 +229,7 @@ fn shot_numbers_keep_counting_across_sessions() {
     let flags = HostFlags::new();
     let mut keys = Vec::new();
     for _ in 0..2 {
-        let mut session =
-            driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+        let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
         keys.extend(shot_keys(&frp(&play(
             &mut session,
             &flags,
@@ -215,7 +243,7 @@ fn shot_numbers_keep_counting_across_sessions() {
 fn a_swing_while_shots_are_held_takes_no_number() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
     let flags = HostFlags::new();
     flags.set_shots_allowed(false);
     // Up to the first swing's end and its cooldown.
@@ -231,12 +259,12 @@ fn a_swing_while_shots_are_held_takes_no_number() {
 }
 
 #[test]
-fn commands_change_the_club_and_hand_only_when_they_differ() {
+fn turns_change_the_club_and_hand_only_when_they_differ() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
     let flags = HostFlags::new();
-    let start = telemetry(&frp(&play(&mut session, &flags, 1)));
+    let start = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("7I", "rh")
@@ -244,23 +272,23 @@ fn commands_change_the_club_and_hand_only_when_they_differ() {
 
     // The same club and hand again: nothing to report.
     session
-        .command(
-            &DeviceCommand::default()
+        .hints(
+            &TurnHints::default()
                 .with_club(flightrelay::Club::Iron7)
-                .with_handed(Handedness::Right),
+                .with_handedness(Handedness::Right),
         )
         .unwrap();
-    assert!(telemetry(&frp(&play(&mut session, &flags, 1))).is_empty());
+    assert!(telemetry(&play(&mut session, &flags, 1)).is_empty());
 
     // A putt is the putter selected; the mode needs nothing.
     session
-        .command(
-            &DeviceCommand::default()
-                .with_mode(flightrelay::DetectionMode::Putting)
+        .hints(
+            &TurnHints::default()
+                .with_mode(Mode::Putting)
                 .with_club(flightrelay::Club::Putter),
         )
         .unwrap();
-    let after = telemetry(&frp(&play(&mut session, &flags, 1)));
+    let after = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(after["profile"], "PT");
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
     let rest = play(&mut session, &flags, polls_for(&rec));
@@ -268,7 +296,7 @@ fn commands_change_the_club_and_hand_only_when_they_differ() {
     let launches: Vec<_> = rest
         .iter()
         .filter_map(|e| match e {
-            FrpEvent::Launch { launch, .. } => Some(launch),
+            FrpBody::ShotLaunch(m) => Some(&m.launch),
             _ => None,
         })
         .collect();
@@ -283,7 +311,7 @@ fn commands_change_the_club_and_hand_only_when_they_differ() {
 fn tuning_and_thresholds_apply_to_a_running_session() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
     let mut slower = Settings::default();
     slower.tuning.max_club_speed = 50.0;
     slower.config.thresholds.gap_ms = 60;
@@ -298,7 +326,7 @@ fn tuning_and_thresholds_apply_to_a_running_session() {
     let club_speeds: Vec<f64> = events
         .iter()
         .filter_map(|e| match e {
-            FrpEvent::ClubPath { club, .. } => club.club_speed.map(flightrelay::Velocity::as_mph),
+            FrpBody::ShotClub(m) => m.club.club_speed.map(flightrelay::Velocity::as_mph),
             _ => None,
         })
         .collect();
@@ -322,8 +350,7 @@ fn every_fixture_plays_through_the_driver() {
         settings.config.cpi = rec.header.cpi;
         settings.config.report_limit = rec.header.report_limit;
         let mut driver = Thumbswing::new(settings).unwrap();
-        let mut session =
-            driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+        let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
         let events = play(&mut session, &HostFlags::new(), polls_for(&rec));
         let keys = shot_keys(&frp(&events));
         let want: Vec<u32> = (1..=u32::try_from(expect.swings.len()).unwrap()).collect();
@@ -387,25 +414,16 @@ fn an_unplugged_input_reports_not_ready_until_it_is_back() {
         attempts: 0,
     };
     let mut driver = driver();
-    let mut session = driver.connect_with(input, &DeviceCommand::default());
+    let mut session = driver.connect_with(input, &TurnHints::default());
     let events = play(&mut session, &HostFlags::new(), 200);
-    let ready: Vec<&str> = frp(&events)
-        .iter()
-        .filter_map(|e| match e {
-            FrpEvent::DeviceTelemetry {
-                telemetry: Some(t), ..
-            } => t.get("ready").map(String::as_str),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(ready, ["true", "false", "true"]);
+    assert_eq!(ready_values(&events), [true, false, true]);
 }
 
-struct Host(DeviceCommand);
+struct Host(TurnHints);
 
 impl ConnectHost for Host {
     fn tick(&mut self) {}
-    fn latched(&self) -> &DeviceCommand {
+    fn hints(&self) -> &TurnHints {
         &self.0
     }
 }
@@ -417,7 +435,7 @@ fn connect_serves_a_given_input_once_and_honors_stop() {
     let mut seen = Vec::new();
     let mut sink = |e| seen.push(e);
     let stop = Stop::new();
-    let mut host = Host(DeviceCommand::default().with_club(flightrelay::Club::PitchingWedge));
+    let mut host = Host(TurnHints::default().with_club(flightrelay::Club::PitchingWedge));
     let mut driver =
         Thumbswing::with_input(Settings::default(), Replay::new(&rec, Pace::Fast)).unwrap();
 
@@ -438,8 +456,8 @@ fn connect_serves_a_given_input_once_and_honors_stop() {
     };
     let mut alerts = Vec::new();
     let mut sink = |e| {
-        if let DeviceEvent::Frp(FrpEvent::Alert { severity, .. }) = e {
-            alerts.push(severity);
+        if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
+            alerts.push(alert.severity);
         }
     };
     assert_eq!(
@@ -477,12 +495,8 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
     assert!(DriverConfig::validate(&Settings::default()).is_ok());
 }
 
-fn telemetry_of(events: &[DeviceEvent]) -> HashMap<String, String> {
-    telemetry(&frp(events))
-}
-
 #[test]
-fn the_setting_starts_the_club_and_hand_and_a_command_overrides_it() {
+fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     let rec = two_swings();
     let mut settings = Settings {
         club: thumbswing::Club::Driver,
@@ -492,43 +506,52 @@ fn the_setting_starts_the_club_and_hand_and_a_command_overrides_it() {
     let mut driver = Thumbswing::new(settings.clone()).unwrap();
     let flags = HostFlags::new();
 
-    // No command: the setting.
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
-    let start = telemetry_of(&play(&mut session, &flags, 1));
+    // No hints: the setting.
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let start = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("DR", "lh")
     );
 
-    // A changed setting applies at once while the host has named nothing,
-    // and only the changed key is sent.
+    // A changed setting applies at once while the turn names nothing, and
+    // only the changed key is sent.
     settings.club = thumbswing::Club::Wood3;
     driver.apply_config(&settings);
-    let changed = telemetry_of(&play(&mut session, &flags, 1));
+    let changed = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(changed.len(), 1, "{changed:?}");
     assert_eq!(changed["profile"], "3W");
 
-    // The host's club replaces it, and a later setting change leaves it.
+    // The turn's club replaces it, and a later setting change leaves it.
     session
-        .command(&DeviceCommand::default().with_club(flightrelay::Club::PitchingWedge))
+        .hints(&TurnHints::default().with_club(flightrelay::Club::PitchingWedge))
         .unwrap();
-    let after = telemetry_of(&play(&mut session, &flags, 1));
+    let after = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(after.len(), 1, "only the club changed: {after:?}");
     assert_eq!(after["profile"], "PW");
     settings.club = thumbswing::Club::Iron5;
     driver.apply_config(&settings);
-    assert!(telemetry_of(&play(&mut session, &flags, 1)).is_empty());
+    assert!(telemetry(&play(&mut session, &flags, 1)).is_empty());
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
-    // The hand still follows the setting: the host named no hand.
+    // The hand still follows the setting: the turn names no hand.
     settings.hand = thumbswing::Hand::Right;
     driver.apply_config(&settings);
-    let hand = telemetry_of(&play(&mut session, &flags, 1));
+    let hand = telemetry(&play(&mut session, &flags, 1));
     assert_eq!(hand.len(), 1, "{hand:?}");
     assert_eq!(hand["handed"], "rh");
 
-    // A latched command at connect wins over the setting too.
-    let latched = DeviceCommand::default().with_handed(Handedness::Left);
-    let session = driver.connect_with(Replay::new(&rec, Pace::Fast), &latched);
+    // A turn without a club after one with a club: the setting again.
+    session
+        .hints(&TurnHints::default().with_handedness(Handedness::Right))
+        .unwrap();
+    let dropped = telemetry(&play(&mut session, &flags, 1));
+    assert_eq!(dropped.len(), 1, "only the club changed: {dropped:?}");
+    assert_eq!(dropped["profile"], "5I");
+    assert_eq!(session.client().club(), thumbswing::Club::Iron5);
+
+    // The hints at connect win over the setting too.
+    let hints = TurnHints::default().with_handedness(Handedness::Left);
+    let session = driver.connect_with(Replay::new(&rec, Pace::Fast), &hints);
     assert_eq!(session.client().club(), thumbswing::Club::Iron5);
     assert_eq!(session.client().hand(), thumbswing::Hand::Left);
 }
@@ -537,22 +560,25 @@ fn the_setting_starts_the_club_and_hand_and_a_command_overrides_it() {
 fn the_putting_mode_selects_the_putter_whatever_the_club() {
     let rec = two_swings();
     let mut driver = driver();
-    let latched = DeviceCommand::default()
-        .with_mode(flightrelay::DetectionMode::Putting)
+    let putting = TurnHints::default()
+        .with_mode(Mode::Putting)
         .with_club(flightrelay::Club::Driver);
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &latched);
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &putting);
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
-    session
-        .command(&DeviceCommand::default().with_mode(flightrelay::DetectionMode::Full))
-        .unwrap();
+    session.hints(&putting.with_mode(Mode::Full)).unwrap();
     assert_eq!(session.client().club(), thumbswing::Club::Driver);
+    // A turn with the mode only names no club: the setting's.
+    session
+        .hints(&TurnHints::default().with_mode(Mode::Full))
+        .unwrap();
+    assert_eq!(session.client().club(), thumbswing::Club::Iron7);
 }
 
 #[test]
 fn a_fast_replay_plays_without_sleeping() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &DeviceCommand::default());
+    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
     let flags = HostFlags::new();
     let mut seen = Vec::new();
     let started = std::time::Instant::now();
@@ -603,7 +629,7 @@ fn alerts_for(driver: &mut Thumbswing, error: &Error, backoff: &mut Backoff) -> 
     let mut alerts = Vec::new();
     let mut debug = Vec::new();
     let mut sink = |e| match e {
-        DeviceEvent::Frp(FrpEvent::Alert { message, .. }) => alerts.push(message),
+        DeviceEvent::Frp(FrpBody::BusAlert(alert)) => alerts.push(alert.message),
         DeviceEvent::Log(flightrelay::driver::Level::Debug, line) => debug.push(line),
         _ => {}
     };
@@ -684,22 +710,22 @@ fn a_choice_left_to_the_user_is_alerted_once_per_outage() {
     .unwrap();
     let flags = HostFlags::new();
     let stop = Stop::new();
-    let mut host = Host(DeviceCommand::default());
+    let mut host = Host(TurnHints::default());
     let mut backoff = Backoff::default();
     let mut alerts = Vec::new();
     let mut delays = Vec::new();
     for _ in 0..9 {
         let mut sink = |e| {
-            if let DeviceEvent::Frp(FrpEvent::Alert { message, .. }) = e {
-                alerts.push(message);
+            if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
+                alerts.push(alert.message);
             }
         };
         let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
         let ended = driver.connect(&mut ctx).err();
         if let Some(error) = ended {
             let mut sink = |e| {
-                if let DeviceEvent::Frp(FrpEvent::Alert { message, .. }) = e {
-                    alerts.push(message);
+                if let DeviceEvent::Frp(FrpBody::BusAlert(alert)) = e {
+                    alerts.push(alert.message);
                 }
             };
             let end = SessionEnd {
@@ -796,22 +822,10 @@ fn gone_at(node: &str, by_id: &[&str], name: &str) -> Box<dyn Input + Send> {
 fn connect(driver: &mut Thumbswing) -> Result<Session, Error> {
     let flags = HostFlags::new();
     let stop = Stop::new();
-    let mut host = Host(DeviceCommand::default());
+    let mut host = Host(TurnHints::default());
     let mut sink = |_| {};
     let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
     driver.connect(&mut ctx)
-}
-
-fn ready_values(events: &[DeviceEvent]) -> Vec<String> {
-    frp(events)
-        .iter()
-        .filter_map(|e| match e {
-            FrpEvent::DeviceTelemetry {
-                telemetry: Some(t), ..
-            } => t.get("ready").cloned(),
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]
@@ -832,12 +846,12 @@ fn with_no_device_named_an_unplug_chooses_the_device_again() {
     .unwrap();
     let flags = HostFlags::new();
     let stop = Stop::new();
-    let mut host = Host(DeviceCommand::default());
+    let mut host = Host(TurnHints::default());
     let mut sink = |_| {};
     let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
     let mut session = driver.connect(&mut ctx).unwrap();
     let events = play(&mut session, &flags, 200);
-    assert_eq!(ready_values(&events)[..3], ["true", "false", "true"]);
+    assert_eq!(ready_values(&events)[..3], [true, false, true]);
     let opened = opened.lock().unwrap();
     assert!(opened.len() >= 3, "{opened:?}");
     assert!(
@@ -864,12 +878,12 @@ fn a_named_device_is_reopened_by_its_name_not_chosen_again() {
     .unwrap();
     let flags = HostFlags::new();
     let stop = Stop::new();
-    let mut host = Host(DeviceCommand::default());
+    let mut host = Host(TurnHints::default());
     let mut sink = |_| {};
     let mut ctx = ConnectCtx::new(&stop, Events::new(&mut sink, &flags), &mut host);
     let mut session = driver.connect(&mut ctx).unwrap();
     let events = play(&mut session, &flags, 200);
-    assert_eq!(ready_values(&events), ["true", "false"]);
+    assert_eq!(ready_values(&events), [true, false]);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
@@ -894,7 +908,7 @@ fn the_device_id_is_the_by_id_link_name() {
     assert_eq!(identity.device, LINK_NAME, "the first link, file name only");
     assert_eq!(identity.label(), "thumbswing (Example Trackball)");
     let events = play(&mut session, &HostFlags::new(), 1);
-    assert_eq!(telemetry(&frp(&events))["input"], "Example Trackball");
+    assert_eq!(telemetry(&events)["input"], "Example Trackball");
 }
 
 #[test]
@@ -935,7 +949,7 @@ fn the_device_id_is_the_same_after_a_replug() {
     let mut session = connect(&mut driver).unwrap();
     assert_eq!(session.identity().device, LINK_NAME);
     let events = play(&mut session, &HostFlags::new(), 200);
-    assert_eq!(ready_values(&events)[..3], ["true", "false", "true"]);
+    assert_eq!(ready_values(&events)[..3], [true, false, true]);
     let reopened = opened.load(std::sync::atomic::Ordering::SeqCst);
     assert!(reopened >= 2, "{reopened}");
     assert_eq!(session.identity().device, LINK_NAME);

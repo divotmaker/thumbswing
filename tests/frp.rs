@@ -1,6 +1,6 @@
 //! FRP end to end in one process: the driver served by flightrelay's
-//! `FrpServer`, a controller that picks a club with `set_detection_mode`, and
-//! the shots of a replayed session.
+//! `FrpServer` as a launch monitor actor, a peer that publishes a
+//! `golfer.turn` with a club, and the shots of a replayed session.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,9 +9,10 @@ use std::thread;
 use std::time::Duration;
 
 use flightrelay::driver::Stop;
+use flightrelay::types::roles;
 use flightrelay::{
-    EndpointConfig, FrpEndpoint, FrpEvent, FrpMessage, FrpProtocolMessage, FrpServer, Role,
-    ServerConfig, ServerEvent, Source, Transport,
+    BusActor, EndpointConfig, FrpBody, FrpEndpoint, FrpMessage, FrpServer, GolferTurn, Handedness,
+    Mode, ServerConfig, ServerEvent, Source, Transport,
 };
 use thumbswing::driver::Thumbswing;
 use thumbswing::recording::{Pace, Replay};
@@ -50,39 +51,43 @@ impl Input for Gated {
     }
 }
 
-/// A controller that picks the driver for a left-hander and collects every
-/// event until two shots have finished.
-fn controller(addr: std::net::SocketAddr) -> Vec<FrpEvent> {
+const SERVER_ID: &str = "7d2f9a41c03be856";
+const PEER_ID: &str = "c19e04b7a2d5f318";
+
+/// A session actor whose turn is the driver for a left-hander; collects
+/// every message until two shots have finished.
+fn peer(addr: std::net::SocketAddr) -> Vec<FrpMessage> {
     let url = format!("ws://{addr}/frp");
-    let mut ep = FrpEndpoint::open(
-        EndpointConfig::new(Role::Controller, Transport::connect(url)).with_name("test"),
-    )
-    .unwrap();
+    let mut ep = FrpEndpoint::open(EndpointConfig::new(Transport::connect(url))).unwrap();
     let mut conn = ep.establish().unwrap();
-    conn.send_protocol(&FrpProtocolMessage::SetDetectionMode {
-        mode: Some(flightrelay::DetectionMode::Full),
-        handed: Some(flightrelay::Handedness::Left),
-        club: Some(flightrelay::Club::Driver),
-    })
-    .unwrap();
-    let mut events = Vec::new();
+    let me = FrpMessage::new(
+        PEER_ID,
+        BusActor::new("test", 2.0).with_role(roles::SESSION),
+    );
+    let turn = FrpMessage::new(
+        PEER_ID,
+        GolferTurn::new(
+            None,
+            Some(flightrelay::Club::Driver),
+            Handedness::Left,
+            Mode::Full,
+        ),
+    );
+    conn.greet(&[me], &[turn]).unwrap();
+    let mut messages = Vec::new();
     let mut finished = 0;
     while finished < 2 {
-        match conn.recv().unwrap() {
-            FrpMessage::Envelope(env) => {
-                if matches!(env.event, FrpEvent::ShotFinished { .. }) {
-                    finished += 1;
-                }
-                events.push(env.event);
-            }
-            FrpMessage::Protocol(_) => {}
+        let msg = conn.recv().unwrap();
+        if matches!(msg.body, FrpBody::ShotFinished(_)) {
+            finished += 1;
         }
+        messages.push(msg);
     }
-    events
+    messages
 }
 
 #[test]
-fn a_controller_gets_the_shots_with_the_club_it_chose() {
+fn a_peer_gets_the_shots_with_the_club_of_its_turn() {
     // Two swings: straight at full power, then a pull 20° left and a push 5°
     // right at 75 %.
     let samples = StreamBuilder::new(125.0)
@@ -101,8 +106,7 @@ fn a_controller_gets_the_shots_with_the_club_it_chose() {
     let server = {
         let stop = stop.clone();
         thread::spawn(move || {
-            // The swings start once the controller's club choice has reached
-            // the driver.
+            // The swings start once the turn's club has reached the driver.
             let open = Arc::new(AtomicBool::new(false));
             let input = Gated {
                 replay: Replay::new(&rec, Pace::Fast),
@@ -111,84 +115,81 @@ fn a_controller_gets_the_shots_with_the_club_it_chose() {
             let mut settings = Settings::default();
             settings.config.grab = false;
             let driver = Thumbswing::with_input(settings, input).unwrap();
-            FrpServer::new(driver, ServerConfig::new(Transport::listen("127.0.0.1:0")))
-                .on_event(move |event| match event {
-                    ServerEvent::Listening(addr) => {
-                        let _ = addr_tx.send(*addr);
-                    }
-                    ServerEvent::Command(cmd) if cmd.club.is_some() => {
-                        open.store(true, Ordering::SeqCst);
-                    }
-                    _ => {}
-                })
-                .run(&stop)
+            FrpServer::new(
+                driver,
+                ServerConfig::new(Transport::listen("127.0.0.1:0"), SERVER_ID),
+            )
+            .on_event(move |event| match event {
+                ServerEvent::Listening(addr) => {
+                    let _ = addr_tx.send(*addr);
+                }
+                ServerEvent::Hints(hints) if hints.club.is_some() => {
+                    open.store(true, Ordering::SeqCst);
+                }
+                _ => {}
+            })
+            .run(&stop)
         })
     };
     let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    let events = controller(addr);
+    let messages = peer(addr);
     stop.stop();
     server.join().unwrap().unwrap();
+    assert!(messages.iter().all(|m| m.from == SERVER_ID), "{messages:?}");
 
-    // Telemetry says what the device is, that it is virtual, and which club
-    // it is using; it comes before the first shot.
-    let first_shot = events
+    // The actor says what the device is, that it is virtual, which club it
+    // is using, and that it is ready, before the first shot.
+    let first_shot = messages
         .iter()
-        .position(|e| matches!(e, FrpEvent::ShotTrigger { .. }))
+        .position(|m| matches!(m.body, FrpBody::ShotTrigger(_)))
         .unwrap();
-    let identity = events[..first_shot].iter().find_map(|e| match e {
-        FrpEvent::DeviceTelemetry {
-            manufacturer: Some(m),
-            model,
-            source,
-            ..
-        } => Some((m.clone(), model.clone(), *source)),
-        _ => None,
-    });
-    let (manufacturer, model, source) = identity.expect("identity telemetry before the first shot");
-    assert_eq!(manufacturer, "divotmaker");
-    assert_eq!(model.as_deref(), Some("thumbswing trackball"));
-    assert_eq!(source, Some(Source::Virtual));
-    // Telemetry carries what changed: every key at the start, then the club
-    // and hand the controller chose.
-    let mut t = std::collections::HashMap::new();
-    for e in &events[..first_shot] {
-        if let FrpEvent::DeviceTelemetry {
-            telemetry: Some(keys),
-            ..
-        } = e
-        {
-            t.extend(keys.clone());
-        }
-    }
+    let actor = messages[..first_shot]
+        .iter()
+        .rev()
+        .find_map(|m| match &m.body {
+            FrpBody::BusActor(actor) => Some(actor),
+            _ => None,
+        })
+        .expect("bus.actor before the first shot");
+    assert!(actor.has_role(roles::LAUNCH_MONITOR));
+    assert!(actor.is_clear(), "ready: {:?}", actor.blockers);
+    let device = actor.device.as_ref().expect("device block");
+    assert_eq!(device.manufacturer.as_deref(), Some("divotmaker"));
+    assert_eq!(device.model.as_deref(), Some("thumbswing trackball"));
+    assert_eq!(device.source, Some(Source::Virtual));
+    let t = actor.telemetry.as_ref().expect("telemetry");
     assert_eq!(t["profile"], "DR");
     assert_eq!(t["handed"], "lh");
     assert_eq!(t["synthetic"], "true");
 
-    // Each shot is trigger → launch → club_path → finished under one key,
-    // with no flight result: the controller simulates the flight.
-    let shots: Vec<&[FrpEvent]> = events[first_shot..]
-        .split_inclusive(|e| matches!(e, FrpEvent::ShotFinished { .. }))
+    // Each shot is trigger → launch → club → finished under one key, with
+    // no flight: a game flies the ball.
+    let shots: Vec<Vec<&FrpBody>> = messages[first_shot..]
+        .split_inclusive(|m| matches!(m.body, FrpBody::ShotFinished(_)))
+        .map(|shot| {
+            shot.iter()
+                .map(|m| &m.body)
+                .filter(|b| !matches!(b, FrpBody::BusActor(_)))
+                .collect()
+        })
         .collect();
     assert_eq!(shots.len(), 2);
     for (i, shot) in shots.iter().enumerate() {
-        let shot: Vec<&FrpEvent> = shot
-            .iter()
-            .filter(|e| !matches!(e, FrpEvent::DeviceTelemetry { .. }))
-            .collect();
         let [
-            FrpEvent::ShotTrigger { key, timestamp },
-            FrpEvent::Launch { key: k1, launch },
-            FrpEvent::ClubPath { key: k2, club },
-            FrpEvent::ShotFinished { key: k3 },
+            FrpBody::ShotTrigger(trigger),
+            FrpBody::ShotLaunch(launch),
+            FrpBody::ShotClub(club),
+            FrpBody::ShotFinished(finished),
         ] = shot.as_slice()
         else {
             panic!("{shot:?}")
         };
-        assert!(k1 == key && k2 == key && k3 == key);
+        let key = &trigger.key;
+        assert!(&launch.key == key && &club.key == key && &finished.key == key);
         assert_eq!(key.shot_number as usize, i + 1);
-        assert!(timestamp.is_some());
-        let speed = launch.launch_speed.unwrap().as_mph();
-        let club_speed = club.club_speed.unwrap().as_mph();
+        assert!(trigger.timestamp.is_some());
+        let speed = launch.launch.launch_speed.unwrap().as_mph();
+        let club_speed = club.club.club_speed.unwrap().as_mph();
         if i == 0 {
             // A full-power drive: 100 mph club, 149 mph ball.
             assert!((club_speed - 100.0).abs() < 2.0, "{club_speed}");

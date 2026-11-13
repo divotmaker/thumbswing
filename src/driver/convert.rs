@@ -14,10 +14,10 @@ fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
 
-/// The FRP `launch` for a launch: speed, elevation, azimuth and both spin
+/// The FRP launch (`shot.launch`) for a launch: speed, elevation, azimuth and both spin
 /// pairs (the components come from the model, total and axis are completed
 /// from them; a shot without spin has a total of 0 and no axis). There is
-/// no `flight_result`: the controller simulates the flight from the launch.
+/// no `shot.flight`: a game or flight model flies the ball from the launch.
 #[must_use]
 // The spins are rounded rpm, far inside `i32`.
 #[allow(clippy::cast_possible_truncation)]
@@ -35,7 +35,7 @@ pub fn launch(l: &Launch) -> FrpLaunch {
     out
 }
 
-/// The FRP `club_path` for a shot: club speed, path, face, attack angle,
+/// The FRP club data (`shot.club`) for a shot: club speed, path, face, attack angle,
 /// dynamic loft and smash factor. The swing plane is the path (a trackball
 /// has no separate plane); spin loft is not sent, since the spec reserves it
 /// for a measured 3-D value.

@@ -330,16 +330,16 @@ pub struct Settings {
         serde(skip_serializing_if = "flightrelay::config::is_default")
     )]
     pub device: Option<String>,
-    /// The club in play until a host names one, as an FRP club code (`DR`,
-    /// `7I`, `PW`, `PT`, …; codes without a row of their own map to the
-    /// nearest row). A club from the host's `set_detection_mode` replaces it.
+    /// The club in play while the turn names none, as an FRP club code
+    /// (`DR`, `7I`, `PW`, `PT`, …; codes without a row of their own map to
+    /// the nearest row). The club of a `golfer.turn` takes its place.
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "flightrelay::config::is_default")
     )]
     pub club: Club,
-    /// The player's hand until a host names one: `rh` or `lh`. A hand from
-    /// the host's `set_detection_mode` replaces it.
+    /// The player's hand while the turn names none: `rh` or `lh`. The
+    /// handedness of a `golfer.turn` takes its place.
     #[cfg_attr(
         feature = "config",
         serde(skip_serializing_if = "flightrelay::config::is_default")

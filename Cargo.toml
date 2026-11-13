@@ -15,7 +15,7 @@ exclude = [".github/", "rust-toolchain.toml"]
 thiserror = "2"
 # The driver config types (`config`), the `DeviceDriver` impl (`driver`) and
 # the `thumbswing-frp` binary (`frp`).
-flightrelay = { version = "0.5", default-features = false, optional = true }
+flightrelay = { version = "0.6.0", default-features = false, optional = true }
 # Serde on `Settings`, `Config`, `Thresholds`, `Tuning`, `Club` and `Hand`
 # (`config`).
 serde = { version = "1", features = ["derive"], optional = true }

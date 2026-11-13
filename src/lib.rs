@@ -45,8 +45,8 @@
 //!   device stack, so a settings form can use it.
 //! - **`driver`** — `driver::Thumbswing`, the flightrelay `DeviceDriver` a
 //!   host such as a golf automation bus runs (implies `config`).
-//! - **`frp`** — the `thumbswing-frp` binary, which serves the driver to
-//!   Flight Relay Protocol controllers (implies `driver`).
+//! - **`frp`** — the `thumbswing-frp` binary, which runs the driver as a
+//!   launch monitor on a Flight Relay Protocol bus (implies `driver`).
 //! - **`testing`** — `thumbswing::testing`: synthetic swing streams and a
 //!   manual clock.
 

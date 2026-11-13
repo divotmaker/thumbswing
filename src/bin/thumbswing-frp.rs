@@ -1,10 +1,10 @@
 //! thumbswing-frp — a Flight Relay Protocol device for a trackball swing.
 //!
-//! Reads a trackball (or any mouse), turns each swing into a shot, and serves
-//! the shots to FRP controllers (a simulator) on port 5881. The club and the
-//! player's hand are the `club` and `hand` settings (the 7-iron and
-//! right-handed by default) until a controller's `set_detection_mode` names
-//! others.
+//! Reads a trackball (or any mouse), turns each swing into a shot, and
+//! publishes the shots as a launch monitor actor on an FRP bus, listening on
+//! port 5881. The club and the player's hand are those of each `golfer.turn`,
+//! else the `club` and `hand` settings (the 7-iron and right-handed by
+//! default).
 //!
 //! ```sh
 //! thumbswing-frp                                           # the only trackball found, 0.0.0.0:5881
@@ -18,9 +18,11 @@
 //! The flags are flightrelay's `run` flags (`--config`, `--target`, `--set`,
 //! `--log`, `--help`); every [`thumbswing::Settings`] field is a `--set` key.
 //! Development only: `--replay FILE` serves a recording instead of a device,
-//! starting when the first controller connects; `--fast` replays it as fast
-//! as it can be processed instead of at the recorded timing,
-//! `--exit-after-replay` quits when it is done. Ctrl-C quits.
+//! starting when the first peer connects; `--fast` replays it as fast as it
+//! can be processed instead of at the recorded timing, `--exit-after-replay`
+//! quits when it is done. The replay's actor id is `frp.actor_id` from the
+//! `--config` file (saved there when it has none), or a `--set`, else a new
+//! one for the run. Ctrl-C quits.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -29,7 +31,9 @@ use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
 use flightrelay::driver::{DeviceEvent, Level, Stop};
-use flightrelay::{FrpEvent, FrpServer, RunOptions, ServerConfig, ServerEvent, Transport};
+use flightrelay::{
+    ActorIdOrigin, FrpBody, FrpServer, RunOptions, ServerConfig, ServerEvent, Transport,
+};
 use thumbswing::driver::{DEFAULT_TARGET, Thumbswing};
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::{DeviceInfo, Input, Sample, Settings};
@@ -38,7 +42,7 @@ const PROGRAM: &str = "thumbswing-frp";
 
 const DEV_HELP: &str = "\nDevelopment:\n\
     \x20 --replay <file>        serve a recording instead of a device; it starts when the first\n\
-    \x20                        controller connects (cpi and report_limit default to its header)\n\
+    \x20                        peer connects (cpi and report_limit default to its header)\n\
     \x20 --fast                 replay as fast as it can be processed, not at the recorded timing\n\
     \x20 --exit-after-replay    quit when the recording has been played";
 
@@ -163,18 +167,25 @@ impl RunFlags {
     }
 }
 
+/// The table of the config file that holds the bus settings.
+const RUNNER_TABLE: &str = "frp";
+
 /// The settings: `base`, then the `--config` file, then each `--set`, then
-/// reading and validation with the key named, the way `run` resolves them.
-fn resolve(base: &Settings, flags: &RunFlags) -> Result<Settings, String> {
+/// reading and validation with the key named, the way `run` resolves them;
+/// and the actor id a `--set frp.actor_id=` gives, when there is one (the
+/// file's is read by `flightrelay::config_actor_id`).
+fn resolve(base: &Settings, flags: &RunFlags) -> Result<(Settings, Option<String>), String> {
     let mut table = match toml::Value::try_from(base) {
         Ok(toml::Value::Table(t)) => t,
         Ok(_) => toml::Table::new(),
         Err(e) => return Err(e.to_string()),
     };
+    let mut actor_id = None;
     if let Some(path) = &flags.config {
         let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-        let file: toml::Table =
+        let mut file: toml::Table =
             toml::from_str(&text).map_err(|e| format!("{path}: {}", e.message()))?;
+        file.remove(RUNNER_TABLE);
         merge(&mut table, file);
     }
     let known: toml::Table = toml::from_str(&Settings::help_toml()).unwrap_or_default();
@@ -182,6 +193,18 @@ fn resolve(base: &Settings, flags: &RunFlags) -> Result<Settings, String> {
         let (key, raw) = set
             .split_once('=')
             .ok_or_else(|| format!("--set {set:?}: expected key=value"))?;
+        if let Some(key) = key.strip_prefix("frp.") {
+            // The replay serves no raw frames; the actor id is the one bus
+            // setting it takes.
+            if key != "actor_id" {
+                return Err(format!("frp.{key}: unknown key"));
+            }
+            actor_id = match value_of(raw) {
+                toml::Value::String(id) if !id.is_empty() => Some(id),
+                _ => return Err("frp.actor_id: must be a non-empty string".to_owned()),
+            };
+            continue;
+        }
         // `device` is the one key `--help` lists as unset (a comment).
         if key != "device" && !has_path(&known, key) {
             return Err(format!("{key}: unknown key"));
@@ -189,7 +212,8 @@ fn resolve(base: &Settings, flags: &RunFlags) -> Result<Settings, String> {
         set_path(&mut table, key, value_of(raw))?;
     }
     let text = toml::to_string(&table).map_err(|e| e.to_string())?;
-    Settings::from_toml_str(&text).map_err(|e| e.to_string())
+    let settings = Settings::from_toml_str(&text).map_err(|e| e.to_string())?;
+    Ok((settings, actor_id))
 }
 
 /// A `--set` value: a TOML value when it parses as one, else the text.
@@ -242,6 +266,31 @@ fn set_path(table: &mut toml::Table, path: &str, value: toml::Value) -> Result<(
     Ok(())
 }
 
+/// The replay's actor id: the `--config` file's `frp.actor_id`, saved there
+/// when it has none (`flightrelay::config_actor_id`), else a new one for the
+/// run.
+fn replay_actor_id(config: Option<&str>) -> Result<String, flightrelay::config::ConfigError> {
+    let Some(path) = config else {
+        let id = flightrelay::new_actor_id();
+        eprintln!("{PROGRAM}: new actor id {id} for this run only");
+        return Ok(id);
+    };
+    let kept = flightrelay::config_actor_id(path)?;
+    match &kept.origin {
+        ActorIdOrigin::Read => {}
+        ActorIdOrigin::Saved => eprintln!("{PROGRAM}: new actor id {} saved to {path}", kept.id),
+        ActorIdOrigin::SaveFailed(why) => {
+            eprintln!(
+                "{PROGRAM}: new actor id {} for this run only ({why})",
+                kept.id
+            );
+        }
+        // `NotSaved`, and any origin a later flightrelay adds.
+        _ => eprintln!("{PROGRAM}: new actor id {} for this run only", kept.id),
+    }
+    Ok(kept.id)
+}
+
 /// Serve a recording until Ctrl-C (or its end, with `exit_after_replay`).
 /// Returns the exit code: 0 after a stop, 1 when serving failed, 2 for a bad
 /// command line.
@@ -262,9 +311,16 @@ fn serve_replay(path: &str, fast: bool, exit_after_replay: bool, rest: &[String]
     base.config.cpi = rec.header.cpi;
     base.config.report_limit = rec.header.report_limit;
     base.config.grab = false;
-    let settings = match resolve(&base, &flags) {
+    let (settings, actor_id) = match resolve(&base, &flags) {
         Ok(s) => s,
         Err(e) => return fail(&e, 2),
+    };
+    let actor_id = match actor_id {
+        Some(id) => id,
+        None => match replay_actor_id(flags.config.as_deref()) {
+            Ok(id) => id,
+            Err(e) => return fail(&e, 2),
+        },
     };
     let target = flags.target.as_deref().unwrap_or(DEFAULT_TARGET).to_owned();
     if target
@@ -300,12 +356,12 @@ fn serve_replay(path: &str, fast: bool, exit_after_replay: bool, rest: &[String]
         Transport::listen(target)
     };
     let log = flags.log.unwrap_or(Level::Info);
-    let mut config = ServerConfig::new(transport);
+    let mut config = ServerConfig::new(transport, actor_id);
     config.log_level = log;
-    eprintln!("{PROGRAM}: replaying {path} once a controller connects");
+    eprintln!("{PROGRAM}: replaying {path} once a peer connects");
     let result = FrpServer::new(driver, config)
         .on_event(move |event| {
-            if matches!(event, ServerEvent::ControllerConnected { .. }) {
+            if matches!(event, ServerEvent::PeerConnected { .. }) {
                 open.store(true, Ordering::SeqCst);
             }
             if let Some(line) = describe(event, log) {
@@ -321,13 +377,12 @@ fn serve_replay(path: &str, fast: bool, exit_after_replay: bool, rest: &[String]
 
 /// One output line for a server event, or none: the lines `run` prints.
 fn describe(event: &ServerEvent<'_>, log: Level) -> Option<String> {
-    let name = |peer: Option<&str>| peer.map_or(String::new(), |p| format!(" ({p})"));
+    let at = |addr: Option<std::net::SocketAddr>| addr.map_or(String::new(), |a| format!(" ({a})"));
+    let opt = |v: Option<String>| v.unwrap_or_else(|| "-".into());
     Some(match event {
         ServerEvent::Listening(addr) => format!("listening on {addr}"),
-        ServerEvent::ControllerConnected { peer } => format!("controller connected{}", name(*peer)),
-        ServerEvent::ControllerLeft { peer, reason } => {
-            format!("controller left{}: {reason}", name(*peer))
-        }
+        ServerEvent::PeerConnected { addr } => format!("peer connected{}", at(*addr)),
+        ServerEvent::PeerLeft { addr, reason } => format!("peer left{}: {reason}", at(*addr)),
         ServerEvent::DeviceConnected(identity) => format!("device connected: {}", identity.label()),
         ServerEvent::DeviceLost { error, retry_in } => {
             let why = error.map_or_else(|| "stopped".to_owned(), ToString::to_string);
@@ -336,27 +391,27 @@ fn describe(event: &ServerEvent<'_>, log: Level) -> Option<String> {
                 None => format!("device lost: {why}; giving up"),
             }
         }
-        ServerEvent::Command(cmd) => format!(
-            "command: mode={} hand={} club={}",
-            cmd.mode.map_or("-".into(), |m| m.to_string()),
-            cmd.handed.map_or("-".into(), |h| h.to_string()),
-            cmd.club.map_or("-".into(), |c| c.to_string()),
+        ServerEvent::Hints(hints) => format!(
+            "turn: hand={} club={} mode={}",
+            opt(hints.handedness.map(|h| h.to_string())),
+            opt(hints.club.map(|c| c.to_string())),
+            opt(hints.mode.map(|m| m.to_string())),
         ),
         ServerEvent::Device(DeviceEvent::Log(level, line)) => format!("{level}: {line}"),
         ServerEvent::Device(DeviceEvent::Phase(phase)) if log <= Level::Debug => {
             format!("phase: {phase}")
         }
-        ServerEvent::Device(DeviceEvent::Frp(FrpEvent::Launch { key, launch })) => format!(
+        ServerEvent::Device(DeviceEvent::Frp(FrpBody::ShotLaunch(m))) => format!(
             "shot {}: ball {:.1} mph, launch {:.1} deg, spin {} rpm",
-            key.shot_number,
-            launch
+            m.key.shot_number,
+            m.launch
                 .launch_speed
                 .map_or(0.0, flightrelay::Velocity::as_mph),
-            launch.launch_elevation.unwrap_or_default(),
-            launch.total_spin_rpm.unwrap_or_default()
+            m.launch.launch_elevation.unwrap_or_default(),
+            m.launch.total_spin_rpm.unwrap_or_default()
         ),
-        ServerEvent::Device(DeviceEvent::Frp(FrpEvent::Alert { severity, message })) => {
-            format!("alert ({severity}): {message}")
+        ServerEvent::Device(DeviceEvent::Frp(FrpBody::BusAlert(alert))) => {
+            format!("alert ({}): {}", alert.severity, alert.message)
         }
         _ => return None,
     })
@@ -375,7 +430,7 @@ fn delay_text(d: Duration) -> String {
     }
 }
 
-/// A replay that holds still until `open` is set (the first controller), and
+/// A replay that holds still until `open` is set (the first peer), and
 /// stops the server when it has been played, if asked to.
 struct GatedReplay {
     replay: Replay,
@@ -466,7 +521,8 @@ mod tests {
             "--set=hand=lh".into(),
         ])
         .unwrap();
-        let s = resolve(&base, &flags).unwrap();
+        let (s, actor_id) = resolve(&base, &flags).unwrap();
+        assert_eq!(actor_id, None);
         assert!(
             (s.config.cpi - 800.0).abs() < f64::EPSILON,
             "the base stays"
@@ -497,5 +553,52 @@ mod tests {
         );
         assert!(bad("club=ZZ").starts_with("club: "), "{}", bad("club=ZZ"));
         assert!(RunFlags::parse(&["--bogus".into()]).is_err());
+        assert_eq!(bad("frp.raw_frames=true"), "frp.raw_frames: unknown key");
+        assert_eq!(
+            bad("frp.actor_id=5"),
+            "frp.actor_id: must be a non-empty string"
+        );
+        let flags = RunFlags::parse(&["--set=frp.actor_id=7d2f9a41c03be856".into()]).unwrap();
+        assert_eq!(
+            resolve(&base, &flags).unwrap().1.as_deref(),
+            Some("7d2f9a41c03be856")
+        );
+    }
+
+    #[test]
+    fn the_replay_takes_the_actor_id_from_the_config_file() {
+        let path =
+            std::env::temp_dir().join(format!("thumbswing-frp-replay-{}.toml", std::process::id()));
+        let file = path.display().to_string();
+        std::fs::write(
+            &path,
+            "club = \"PW\"\n\n[frp]\nactor_id = \"c19e04b7a2d5f318\"\n",
+        )
+        .unwrap();
+        let flags = RunFlags::parse(&["--config".into(), file.clone()]).unwrap();
+        let resolved = resolve(&Settings::default(), &flags);
+        let id = replay_actor_id(Some(&file));
+        let _ = std::fs::remove_file(&path);
+        let (settings, set_id) = resolved.unwrap();
+        assert_eq!(settings.club, thumbswing::Club::PitchingWedge);
+        assert_eq!(set_id, None, "only a --set gives an id to resolve");
+        assert_eq!(id.unwrap(), "c19e04b7a2d5f318");
+    }
+
+    #[test]
+    fn a_config_file_without_an_actor_id_keeps_the_one_made_for_it() {
+        let path = std::env::temp_dir().join(format!(
+            "thumbswing-frp-replay-new-{}.toml",
+            std::process::id()
+        ));
+        let file = path.display().to_string();
+        std::fs::write(&path, "club = \"PW\"\n").unwrap();
+        let first = replay_actor_id(Some(&file));
+        let second = replay_actor_id(Some(&file));
+        let _ = std::fs::remove_file(&path);
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert_eq!(first.len(), 16);
+        assert_eq!(first, second);
+        assert!(replay_actor_id(None).is_ok());
     }
 }
