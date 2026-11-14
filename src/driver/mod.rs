@@ -238,10 +238,19 @@ impl Thumbswing {
             started: false,
             profile_due: false,
             handed_due: false,
-            notes: Vec::new(),
         };
-        session.take_hints(hints);
+        session.hints = hints;
+        session.select();
         session
+    }
+}
+
+/// Logs a turn's club code that has no profile.
+fn note_unknown_club(hints: &TurnHints, out: &mut Events<'_>) {
+    if let Some(code) = hints.club
+        && let Err(UnknownClub(code)) = Club::try_from(code)
+    {
+        out.log(Level::Info, format!("no club profile for {code}"));
     }
 }
 
@@ -373,7 +382,9 @@ impl FrpDriver for Thumbswing {
         // A stop while the device opened releases it here (dropping it closes it).
         ctx.tick()?;
         self.alerted = None;
-        Ok(self.session(input, *ctx.hints()))
+        let hints = *ctx.hints();
+        note_unknown_club(&hints, &mut ctx.out);
+        Ok(self.session(input, hints))
     }
 
     fn retry_delay(
@@ -427,8 +438,6 @@ pub struct Session {
     profile_due: bool,
     /// Whether the hand changed since the last telemetry.
     handed_due: bool,
-    /// Log lines from `hints`, which has no event sink, for the next step.
-    notes: Vec<String>,
 }
 
 impl std::fmt::Debug for Session {
@@ -485,14 +494,10 @@ impl Session {
     }
 
     /// Take a turn's hints, which replace the ones before, and put the club
-    /// and hand in play. A club code without a profile is noted and is no
+    /// and hand in play. A club code without a profile is logged and is no
     /// hint.
-    fn take_hints(&mut self, hints: TurnHints) {
-        if let Some(code) = hints.club
-            && let Err(UnknownClub(code)) = Club::try_from(code)
-        {
-            self.notes.push(format!("no club profile for {code}"));
-        }
+    fn take_hints(&mut self, hints: TurnHints, out: &mut Events<'_>) {
+        note_unknown_club(&hints, out);
         self.hints = hints;
         self.select();
     }
@@ -616,14 +621,12 @@ impl Session {
 }
 
 impl FrpSession for Session {
-    type Driver = Thumbswing;
+    type Error = Error;
+    type Action = NoAction;
 
     fn step(&mut self, _now: Instant, out: &mut Events<'_>) -> Result<Activity, Error> {
         // The input's clock is the session's clock: a swing is timed by its
         // samples, so `now` is not read.
-        for note in self.notes.drain(..) {
-            out.log(Level::Info, note);
-        }
         self.follow_live_settings()?;
         self.telemetry(out);
         if let Some(event) = self.client.poll()? {
@@ -636,8 +639,8 @@ impl FrpSession for Session {
         }
     }
 
-    fn hints(&mut self, hints: &TurnHints) -> Result<(), Error> {
-        self.take_hints(*hints);
+    fn hints(&mut self, hints: &TurnHints, out: &mut Events<'_>) -> Result<(), Error> {
+        self.take_hints(*hints, out);
         Ok(())
     }
 

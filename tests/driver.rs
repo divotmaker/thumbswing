@@ -2,12 +2,11 @@
 //! JSONL fixtures through a replay input, via `Thumbswing::connect_with`, and
 //! `connect` with a given input.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
-use flightrelay::driver::testing::TestHost;
+use flightrelay::driver::testing::{TestHost, bodies, status, statuses};
 use flightrelay::driver::{
     Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
 };
@@ -49,50 +48,27 @@ fn play(session: &mut Session, host: &mut TestHost, steps: usize) -> Vec<DeviceE
     host.take()
 }
 
-/// The message bodies: shots and alerts.
-fn frp(events: &[DeviceEvent]) -> Vec<&FrpBody> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            DeviceEvent::Frp(f) => Some(f),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Every telemetry key of the status changes in order, the later value
-/// winning.
-fn telemetry(events: &[DeviceEvent]) -> HashMap<String, String> {
-    let mut all = HashMap::new();
-    for e in events {
-        if let DeviceEvent::StatusChange(StatusChange::Telemetry(pairs)) = e {
-            for (key, value) in pairs {
-                match value {
-                    Some(value) => all.insert(key.clone(), value.clone()),
-                    None => all.remove(key),
-                };
-            }
-        }
-    }
-    all
-}
-
-/// Each change of the blockers, as ready (none) or not (`not_armed`).
+/// Each change of readiness: `true` when the status has no blockers, `false`
+/// when it has `not_armed`. A session starts not armed.
 fn ready_values(events: &[DeviceEvent]) -> Vec<bool> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            DeviceEvent::StatusChange(StatusChange::Blockers(list)) => Some(list),
-            _ => None,
-        })
-        .map(|list| {
+    let mut last = false;
+    statuses(events)
+        .into_iter()
+        .map(|status| {
             assert!(
-                list.is_empty() || list == &[blockers::NOT_ARMED.to_owned()],
-                "{list:?}"
+                status.blockers.is_empty() || status.blockers == [blockers::NOT_ARMED.to_owned()],
+                "{:?}",
+                status.blockers
             );
-            list.is_empty()
+            status.blockers.is_empty()
         })
+        .filter(|ready| std::mem::replace(&mut last, *ready) != *ready)
         .collect()
+}
+
+/// Gives `session` the hints of a turn.
+fn turn(session: &mut Session, host: &mut TestHost, hints: &TurnHints) {
+    host.with(|_, out| session.hints(hints, out)).unwrap();
 }
 
 fn shot_keys(events: &[&FrpBody]) -> Vec<u32> {
@@ -136,7 +112,7 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     let DeviceEvent::StatusChange(StatusChange::Telemetry(_)) = &all[0] else {
         panic!("{:?}", all[0]);
     };
-    let first = telemetry(&all[..1]);
+    let first = status(&all[..1]).telemetry;
     assert_eq!(first["synthetic"], "true");
     assert_eq!(first["input"], "synthetic trackball");
     assert_eq!(first["cpi"], "400");
@@ -153,7 +129,7 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
         "ready before the first shot"
     );
 
-    let events = frp(&all);
+    let events = bodies(&all);
     assert!(
         events.iter().all(|e| !matches!(
             e,
@@ -216,7 +192,10 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     }
 
     host.with(|_, out| session.close(out)).unwrap();
-    assert_eq!(ready_values(&host.take()), [false]);
+    assert_eq!(
+        status(&host.take()).blockers,
+        [blockers::NOT_ARMED.to_owned()]
+    );
 }
 
 #[test]
@@ -227,7 +206,7 @@ fn shot_numbers_keep_counting_across_sessions() {
     let mut keys = Vec::new();
     for _ in 0..2 {
         let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-        keys.extend(shot_keys(&frp(&play(
+        keys.extend(shot_keys(&bodies(&play(
             &mut session,
             &mut host,
             steps_for(&rec),
@@ -245,14 +224,14 @@ fn a_swing_while_shots_are_held_takes_no_number() {
     host.flags.set_shots_allowed(false);
     // Up to the first swing's end and its cooldown.
     let held = play(&mut session, &mut host, 1500);
-    assert!(shot_keys(&frp(&held)).is_empty(), "{held:?}");
+    assert!(shot_keys(&bodies(&held)).is_empty(), "{held:?}");
     assert!(
         held.iter()
             .any(|e| matches!(e, DeviceEvent::Log(_, line) if line.contains("holding shots")))
     );
     host.flags.set_shots_allowed(true);
     let rest = play(&mut session, &mut host, steps_for(&rec));
-    assert_eq!(shot_keys(&frp(&rest)), [1]);
+    assert_eq!(shot_keys(&bodies(&rest)), [1]);
 }
 
 #[test]
@@ -261,35 +240,39 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
     let mut driver = driver();
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
     let mut host = TestHost::new();
-    let start = telemetry(&play(&mut session, &mut host, 1));
+    let start = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("7I", "rh")
     );
 
     // The same club and hand again: nothing to report.
-    session
-        .hints(
-            &TurnHints::default()
-                .with_club(flightrelay::Club::Iron7)
-                .with_handedness(Handedness::Right),
-        )
-        .unwrap();
-    assert!(telemetry(&play(&mut session, &mut host, 1)).is_empty());
+    turn(
+        &mut session,
+        &mut host,
+        &TurnHints::default()
+            .with_club(flightrelay::Club::Iron7)
+            .with_handedness(Handedness::Right),
+    );
+    assert!(
+        status(&play(&mut session, &mut host, 1))
+            .telemetry
+            .is_empty()
+    );
 
     // A putt is the putter selected; the mode needs nothing.
-    session
-        .hints(
-            &TurnHints::default()
-                .with_mode(Mode::Putting)
-                .with_club(flightrelay::Club::Putter),
-        )
-        .unwrap();
-    let after = telemetry(&play(&mut session, &mut host, 1));
+    turn(
+        &mut session,
+        &mut host,
+        &TurnHints::default()
+            .with_mode(Mode::Putting)
+            .with_club(flightrelay::Club::Putter),
+    );
+    let after = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(after["profile"], "PT");
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
     let rest = play(&mut session, &mut host, steps_for(&rec));
-    let rest = frp(&rest);
+    let rest = bodies(&rest);
     let launches: Vec<_> = rest
         .iter()
         .filter_map(|e| match e {
@@ -317,7 +300,7 @@ fn tuning_and_thresholds_apply_to_a_running_session() {
     assert_eq!(driver.config(), &slower);
 
     let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
-    let events = frp(&events);
+    let events = bodies(&events);
     assert!((session.client().tuning().max_club_speed - 50.0).abs() < f64::EPSILON);
     assert_eq!(session.client().config().thresholds.gap_ms, 60);
     let club_speeds: Vec<f64> = events
@@ -349,7 +332,7 @@ fn every_fixture_plays_through_the_driver() {
         let mut driver = Thumbswing::new(settings).unwrap();
         let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
         let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
-        let keys = shot_keys(&frp(&events));
+        let keys = shot_keys(&bodies(&events));
         let want: Vec<u32> = (1..=u32::try_from(expect.swings.len()).unwrap()).collect();
         assert_eq!(keys, want, "{}", path.display());
         checked += 1;
@@ -493,7 +476,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
 
     // No hints: the setting.
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let start = telemetry(&play(&mut session, &mut host, 1));
+    let start = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
         ("DR", "lh")
@@ -503,33 +486,41 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     // only the changed key is sent.
     settings.club = thumbswing::Club::Wood3;
     driver.apply_config(&settings);
-    let changed = telemetry(&play(&mut session, &mut host, 1));
+    let changed = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(changed.len(), 1, "{changed:?}");
     assert_eq!(changed["profile"], "3W");
 
     // The turn's club replaces it, and a later setting change leaves it.
-    session
-        .hints(&TurnHints::default().with_club(flightrelay::Club::PitchingWedge))
-        .unwrap();
-    let after = telemetry(&play(&mut session, &mut host, 1));
+    turn(
+        &mut session,
+        &mut host,
+        &TurnHints::default().with_club(flightrelay::Club::PitchingWedge),
+    );
+    let after = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(after.len(), 1, "only the club changed: {after:?}");
     assert_eq!(after["profile"], "PW");
     settings.club = thumbswing::Club::Iron5;
     driver.apply_config(&settings);
-    assert!(telemetry(&play(&mut session, &mut host, 1)).is_empty());
+    assert!(
+        status(&play(&mut session, &mut host, 1))
+            .telemetry
+            .is_empty()
+    );
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
     // The hand still follows the setting: the turn names no hand.
     settings.hand = thumbswing::Hand::Right;
     driver.apply_config(&settings);
-    let hand = telemetry(&play(&mut session, &mut host, 1));
+    let hand = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(hand.len(), 1, "{hand:?}");
     assert_eq!(hand["handed"], "rh");
 
     // A turn without a club after one with a club: the setting again.
-    session
-        .hints(&TurnHints::default().with_handedness(Handedness::Right))
-        .unwrap();
-    let dropped = telemetry(&play(&mut session, &mut host, 1));
+    turn(
+        &mut session,
+        &mut host,
+        &TurnHints::default().with_handedness(Handedness::Right),
+    );
+    let dropped = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(dropped.len(), 1, "only the club changed: {dropped:?}");
     assert_eq!(dropped["profile"], "5I");
     assert_eq!(session.client().club(), thumbswing::Club::Iron5);
@@ -550,12 +541,15 @@ fn the_putting_mode_selects_the_putter_whatever_the_club() {
         .with_club(flightrelay::Club::Driver);
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &putting);
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
-    session.hints(&putting.with_mode(Mode::Full)).unwrap();
+    let mut host = TestHost::new();
+    turn(&mut session, &mut host, &putting.with_mode(Mode::Full));
     assert_eq!(session.client().club(), thumbswing::Club::Driver);
     // A turn with the mode only names no club: the setting's.
-    session
-        .hints(&TurnHints::default().with_mode(Mode::Full))
-        .unwrap();
+    turn(
+        &mut session,
+        &mut host,
+        &TurnHints::default().with_mode(Mode::Full),
+    );
     assert_eq!(session.client().club(), thumbswing::Club::Iron7);
 }
 
@@ -573,7 +567,7 @@ fn a_fast_replay_steps_without_idling_until_it_has_played() {
         assert!(steps <= steps_for(&rec), "the replay never finished");
     }
     assert!(steps > 6000, "{steps}");
-    assert_eq!(shot_keys(&frp(&host.take())), [1, 2]);
+    assert_eq!(shot_keys(&bodies(&host.take())), [1, 2]);
 }
 
 /// Every error that carries a device path or link name, with the texts
@@ -862,7 +856,7 @@ fn the_device_id_is_the_by_id_link_name() {
     assert_eq!(identity.device, LINK_NAME, "the first link, file name only");
     assert_eq!(identity.label(), "thumbswing (Example Trackball)");
     let events = play(&mut session, &mut TestHost::new(), 1);
-    assert_eq!(telemetry(&events)["input"], "Example Trackball");
+    assert_eq!(status(&events).telemetry["input"], "Example Trackball");
 }
 
 #[test]
