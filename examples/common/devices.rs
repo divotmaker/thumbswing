@@ -37,7 +37,7 @@ pub fn table<'a>(devices: impl IntoIterator<Item = &'a DeviceInfo>) -> String {
     out
 }
 
-/// The device to open from `devices` when no `--device` is given: the one
+/// The device to open from `devices` when no `device` is given: the one
 /// [`device::choose`] picks. Its errors are reworded for the command line,
 /// listing the devices when there is more than one.
 ///
@@ -51,7 +51,7 @@ pub fn choose(devices: &[DeviceInfo]) -> Result<PathBuf, String> {
     };
     device::choose(devices).map_err(|e| match e {
         Error::Ambiguous { devices: paths } => format!(
-            "found {} trackballs/mice; choose one with --device <path, by-id name or device name>:\n{}",
+            "found {} trackballs/mice; choose one with device=<path, by-id name or device name>:\n{}",
             paths.len(),
             table(pointers(true)).trim_end()
         ),
@@ -65,7 +65,7 @@ pub fn choose(devices: &[DeviceInfo]) -> Result<PathBuf, String> {
     })
 }
 
-/// Open the `--device` value the way the library's `device` setting is
+/// Open the `device` value the way the library's `device` setting is
 /// opened ([`device::open_setting`]: a path, a by-id name, or the name the
 /// device reports); without one, the device [`choose`] picks.
 ///

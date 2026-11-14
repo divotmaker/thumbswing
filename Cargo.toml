@@ -45,6 +45,10 @@ frp = ["driver", "flightrelay/server", "flightrelay/main"]
 # (`thumbswing::testing`) for tests of code that consumes the crate.
 testing = []
 
+[[example]]
+name = "monitor"
+required-features = ["config"]
+
 [[bin]]
 name = "thumbswing-frp"
 path = "src/bin/thumbswing-frp.rs"

@@ -32,7 +32,7 @@ list:
 	cargo run --example list
 
 monitor:
-	cargo run --example monitor -- $(if $(device),--device $(device))
+	cargo run --example monitor --features config -- $(if $(device),device=$(device))
 
 serve:
 	cargo run --features frp --bin thumbswing-frp -- $(if $(device),--set device=$(device))

@@ -2,18 +2,19 @@
 //! settings in use.
 //!
 //! ```sh
-//! cargo run --example monitor -- [--device DEVICE] [--club 7I] [--hand RH] [settings…]
-//! cargo run --example monitor -- --replay tests/fixtures/straight_draw_fade_125hz.jsonl --curve-gain 0.3
-//! cargo run --example monitor -- --help        # every settings flag with its unit and default
+//! cargo run --example monitor --features config -- [--replay FILE] [key=value]…
+//! cargo run --example monitor --features config -- device=usb-…-event-mouse club=DR tuning.full_power_speed=40
+//! cargo run --example monitor --features config -- --replay tests/fixtures/straight_draw_fade_125hz.jsonl tuning.curve_gain=0.3
 //! ```
 //!
-//! Without `--device` the only readable trackball or mouse is used; with more
-//! than one it lists them and asks for `--device`. Each settings flag is a
-//! `Settings` field (`--full-power-speed` is `tuning.full_power_speed`, which
-//! `thumbswing-frp` sets with `--set`). Ctrl-C quits.
+//! The settings are the keys of `thumbswing-frp --set` (`thumbswing-frp --help`
+//! lists them with their defaults): `device`, `club`, `hand`, `cpi`,
+//! `report_limit`, `grab`, `thresholds.*` and `tuning.*`, checked by
+//! [`Settings::validate`]. Without `device` the only readable trackball or
+//! mouse is used; with more than one it lists them and asks for `device`.
+//! `--replay FILE` plays a recording in real time instead, with `cpi` and
+//! `report_limit` from its header unless given. Ctrl-C quits.
 
-#[path = "common/cli.rs"]
-mod cli;
 #[path = "common/devices.rs"]
 mod devices;
 #[path = "common/session.rs"]
@@ -25,36 +26,13 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
-use cli::{Opt, ParseError};
+use flightrelay::config::DriverConfig;
+use serde_json::{Map, Value};
 use thumbswing::recording::{Pace, Recording, Replay};
-use thumbswing::{Client, Club, Event, Input};
+use thumbswing::{Client, Event, Input, Settings};
 
-const USAGE: &str = "usage: monitor [--device DEVICE | --replay FILE] [--club CODE] [--hand RH|LH] \
-                     [settings…]";
-
-const OPTS: &[Opt] = &[
-    Opt {
-        name: "--device",
-        meta: Some("DEVICE"),
-        help: "trackball to read: a /dev/input path, a /dev/input/by-id name or the name the \
-               device reports (needed when more than one is found)",
-    },
-    Opt {
-        name: "--replay",
-        meta: Some("FILE"),
-        help: "replay a recording in real time instead of reading a device",
-    },
-    Opt {
-        name: "--club",
-        meta: Some("CODE"),
-        help: "club for every shot, an FRP club code [default: 7I]",
-    },
-    Opt {
-        name: "--hand",
-        meta: Some("RH|LH"),
-        help: "the player's hand [default: RH]",
-    },
-];
+const USAGE: &str =
+    "usage: monitor [--replay FILE] [key=value]…  (the keys of thumbswing-frp --set)";
 
 fn main() -> ExitCode {
     match run() {
@@ -66,44 +44,78 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<(), String> {
-    let args = match cli::parse(std::env::args().skip(1), OPTS) {
-        Ok(a) => a,
-        Err(ParseError::Help) => {
-            print!("{}", cli::help(USAGE, OPTS));
-            return Ok(());
+/// What the command line asks for.
+struct Opts {
+    settings: Settings,
+    /// The keys the command line gave, as a settings table.
+    given: Map<String, Value>,
+    replay: Option<String>,
+}
+
+/// The settings the `key=value` arguments name, and the replay file when
+/// `--replay` is given.
+fn parse(mut args: impl Iterator<Item = String>) -> Result<Opts, String> {
+    let mut given = Map::new();
+    let mut replay = None;
+    while let Some(arg) = args.next() {
+        if arg == "--replay" {
+            replay = Some(args.next().ok_or("--replay needs a file")?);
+        } else if let Some((key, value)) = arg.split_once('=') {
+            // A value is JSON when it parses as JSON, else text.
+            let value =
+                serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_owned()));
+            let mut table = &mut given;
+            let mut parts = key.split('.').peekable();
+            while let Some(part) = parts.next() {
+                if parts.peek().is_none() {
+                    table.insert(part.to_owned(), value);
+                    break;
+                }
+                table = table
+                    .entry(part)
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .ok_or_else(|| format!("{key}: {part} is not a table"))?;
+            }
+        } else {
+            return Err(format!("unexpected argument {arg:?}\n{USAGE}"));
         }
-        Err(ParseError::Invalid(e)) => return Err(e),
-    };
-    if let Some(p) = args.positional.first() {
-        return Err(format!(
-            "unexpected argument {p:?} (--help lists the options)"
-        ));
     }
-    let club = args
-        .value("--club")
-        .map(str::parse::<Club>)
-        .transpose()
-        .map_err(|e| e.to_string())?;
-    let hand = args.value("--hand").map(cli::parse_hand).transpose()?;
-    let replay = args.value("--replay").map(str::to_owned);
-    if replay.is_some() && args.flag("--device") {
-        return Err("--device and --replay cannot be used together".to_owned());
+    let settings = Settings::from_map(given.clone()).map_err(|e| e.to_string())?;
+    Ok(Opts {
+        settings,
+        given,
+        replay,
+    })
+}
+
+fn run() -> Result<(), String> {
+    if std::env::args().any(|a| a == "--help" || a == "-h") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let Opts {
+        settings,
+        given,
+        replay,
+    } = parse(std::env::args().skip(1))?;
+    if replay.is_some() && settings.device().is_some() {
+        return Err("device and --replay cannot be used together".to_owned());
     }
 
-    let mut config = args.settings.config.clone();
+    let mut config = settings.config.clone();
     let input: Box<dyn Input> = if let Some(path) = &replay {
         let rec = Recording::load(path).map_err(|e| e.to_string())?;
-        if !args.given("--cpi") {
+        if !given.contains_key("cpi") {
             config.cpi = rec.header.cpi;
         }
-        if !args.given("--report-limit") {
+        if !given.contains_key("report_limit") {
             config.report_limit = rec.header.report_limit;
         }
         config.grab = false;
         Box::new(Replay::new(&rec, Pace::RealTime))
     } else {
-        Box::new(devices::open(args.value("--device"), config.grab)?)
+        Box::new(devices::open(settings.device(), config.grab)?)
     };
 
     term::install_signal_handlers();
@@ -116,13 +128,9 @@ fn run() -> Result<(), String> {
         if info.grabbed { ", grabbed" } else { "" }
     ));
 
-    let mut client = Client::with_tuning(input, config, args.settings.tuning);
-    if let Some(club) = club {
-        client.set_club(club);
-    }
-    if let Some(hand) = hand {
-        client.set_hand(hand);
-    }
+    let mut client = Client::with_tuning(input, config, settings.tuning);
+    client.set_club(settings.club);
+    client.set_hand(settings.hand);
     let mut last_shot = None;
     screen.status(session::status_line(&client, None));
 
