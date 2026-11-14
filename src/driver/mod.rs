@@ -648,8 +648,7 @@ impl FrpSession for Session {
         &self.identity
     }
 
-    fn close(self, out: &mut Events<'_>) -> Result<(), Error> {
-        out.ready(false);
+    fn close(self, _out: &mut Events<'_>) -> Result<(), Error> {
         // Dropping the client closes the input, which releases the grab.
         drop(self.client);
         Ok(())

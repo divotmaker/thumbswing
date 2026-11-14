@@ -192,9 +192,9 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     }
 
     host.with(|_, out| session.close(out)).unwrap();
-    assert_eq!(
-        status(&host.take()).blockers,
-        [blockers::NOT_ARMED.to_owned()]
+    assert!(
+        statuses(&host.take()).is_empty(),
+        "the host clears the status"
     );
 }
 
