@@ -21,9 +21,9 @@
 //! Lines and replays them as an [`Input`].
 //!
 //! ```no_run
-//! use thumbswing::{Client, Config, Event, device::Device};
+//! use thumbswing::{Client, DetectorConfig, Event, device::Device};
 //!
-//! let config = Config::default();
+//! let config = DetectorConfig::default();
 //! let input = Device::open("/dev/input/by-id/usb-Example_Trackball-event-mouse", config.grab)?;
 //! let mut client = Client::new(input, config);
 //! loop {
@@ -36,11 +36,11 @@
 //! # Ok::<(), thumbswing::Error>(())
 //! ```
 //!
-//! [`Settings`] is everything a device runs with (which input, its
-//! [`Config`] and the [`Tuning`]), with [`Settings::validate`] for the ranges.
+//! [`Config`] is everything a device runs with (which input, its
+//! [`DetectorConfig`] and the [`Tuning`]), with [`Config::validate`] for the ranges.
 //!
 //! Features:
-//! - **`config`** — serde on [`Settings`] and its parts, and `Settings` as a
+//! - **`config`** — serde on [`Config`] and its parts, and `Config` as a
 //!   [`flightrelay`](https://crates.io/crates/flightrelay) `DriverConfig`; no
 //!   device stack, so a settings form can use it.
 //! - **`driver`** — `driver::Thumbswing`, the flightrelay `FrpDriver` a
@@ -72,7 +72,7 @@ pub mod testing;
 
 pub use client::{Client, Event, Shot};
 pub use club::{Club, Hand, UnknownClub, UnknownHand};
-pub use config::{Config, CurveSense, InvalidSetting, Settings, Thresholds, Tuning};
+pub use config::{Config, CurveSense, DetectorConfig, InvalidSetting, Thresholds, Tuning};
 pub use error::Error;
 pub use input::{DeviceInfo, Input};
 pub use launch::{Delivery, ImpactModel, Launch};

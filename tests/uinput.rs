@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use thumbswing::device::Device;
 use thumbswing::testing::StreamBuilder;
-use thumbswing::{Client, Config, Event, Sample};
+use thumbswing::{Client, DetectorConfig, Event, Sample};
 
 const NAME: &str = "thumbswing-uinput-test";
 
@@ -181,7 +181,7 @@ fn a_swing_through_the_kernel_then_unplug_and_replug() {
     let dev = open_when_ready();
     assert!(thumbswing::Input::info(&dev).kernel_timestamps);
     assert!(thumbswing::Input::info(&dev).grabbed);
-    let mut client = Client::new(dev, Config::default());
+    let mut client = Client::new(dev, DetectorConfig::default());
     assert_eq!(client.poll().unwrap(), Some(Event::Ready));
 
     let samples = swing();

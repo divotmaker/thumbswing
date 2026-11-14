@@ -17,7 +17,7 @@ use flightrelay::{
 use thumbswing::driver::Thumbswing;
 use thumbswing::recording::{Pace, Replay};
 use thumbswing::testing::{StreamBuilder, synthetic_recording};
-use thumbswing::{DeviceInfo, Input, Sample, Settings};
+use thumbswing::{Config, DeviceInfo, Input, Sample};
 
 /// A replay that holds still until `open` is set.
 struct Gated {
@@ -112,8 +112,8 @@ fn a_peer_gets_the_shots_with_the_club_of_its_turn() {
                 replay: Replay::new(&rec, Pace::Fast),
                 open: Arc::clone(&open),
             };
-            let mut settings = Settings::default();
-            settings.config.grab = false;
+            let mut settings = Config::default();
+            settings.detector.grab = false;
             let driver = Thumbswing::with_input(settings, input).unwrap();
             FrpServer::new(
                 driver,

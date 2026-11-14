@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use session::Args;
 use thumbswing::recording::{Pace, Recording, Replay};
-use thumbswing::{Client, Club, Config, CurveSense, Event, Tuning};
+use thumbswing::{Client, Club, CurveSense, DetectorConfig, Event, Tuning};
 
 fn main() -> ExitCode {
     let args = match Args::parse(&["--club"]) {
@@ -46,19 +46,13 @@ fn main() -> ExitCode {
     } else {
         Pace::Fast
     };
-    let config = Config {
-        cpi: rec.header.cpi,
-        report_limit: rec.header.report_limit,
-        ..Config::default()
-    };
-    let tuning = Tuning {
-        curve_sense: if args.flag("--physical") {
-            CurveSense::Physical
-        } else {
-            CurveSense::Arcade
-        },
-        ..Tuning::default()
-    };
+    let mut config = DetectorConfig::default();
+    config.cpi = rec.header.cpi;
+    config.report_limit = rec.header.report_limit;
+    let mut tuning = Tuning::default();
+    if args.flag("--physical") {
+        tuning.curve_sense = CurveSense::Physical;
+    }
     println!(
         "{}: {} reports from \"{}\" at {} CPI",
         path,

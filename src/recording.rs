@@ -418,7 +418,12 @@ impl Replay {
     #[must_use]
     pub fn finished(&self) -> bool {
         self.next >= self.samples.len()
-            && self.now >= self.samples.last().map_or(0, |s| s.t_us) + TAIL_US
+            && self.now
+                >= self
+                    .samples
+                    .last()
+                    .map_or(0, |s| s.t_us)
+                    .saturating_add(TAIL_US)
     }
 
     /// Reports not yet delivered.

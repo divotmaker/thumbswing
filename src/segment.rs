@@ -40,7 +40,7 @@
 
 use std::collections::VecDeque;
 
-use crate::config::{Config, Thresholds};
+use crate::config::{DetectorConfig, Thresholds};
 use crate::sample::Sample;
 use crate::swing::Swing;
 
@@ -324,7 +324,7 @@ impl Segmenter {
     /// A segmenter for a device with `config`, scaled so that
     /// `full_power_speed` inches per second is 100 % power.
     #[must_use]
-    pub fn new(config: &Config, full_power_speed: f64) -> Self {
+    pub fn new(config: &DetectorConfig, full_power_speed: f64) -> Self {
         let cpi = config.cpi.max(1.0);
         Self {
             thresholds: config.thresholds,
@@ -342,7 +342,7 @@ impl Segmenter {
     }
 
     /// Apply a new device configuration. A swing in progress keeps going.
-    pub fn set_config(&mut self, config: &Config) {
+    pub fn set_detector_config(&mut self, config: &DetectorConfig) {
         self.thresholds = config.thresholds;
         self.cpi = config.cpi.max(1.0);
         self.report_limit = config.report_limit.max(1);

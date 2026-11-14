@@ -2,7 +2,7 @@
 //! [`flightrelay`](https://crates.io/crates/flightrelay) device driver.
 //!
 //! Requires the `driver` feature. A host (the `thumbswing-frp` binary, a golf
-//! automation bus) builds the driver from [`Settings`] with
+//! automation bus) builds the driver from [`Config`] with
 //! [`FrpDriver::new`], which validates them and opens nothing, then calls
 //! [`connect`](FrpDriver::connect) to open the input and
 //! [`step`](FrpSession::step) to turn swings into FRP messages: the
@@ -33,7 +33,7 @@
 //!
 //! The club and the player's hand come from each `golfer.turn`
 //! ([`TurnHints`]): the turn's club and handedness when it gives them, else
-//! the settings' [`club`](Settings::club) and [`hand`](Settings::hand) (the
+//! the settings' [`club`](Config::club) and [`hand`](Config::hand) (the
 //! 7-iron and right-handed by default), so a change of a setting applies at
 //! once while the turn gives no value for it. The putting mode selects the
 //! putter whatever the club.
@@ -44,7 +44,7 @@
 //! device that comes back under another node is found. The club, the hand,
 //! the thresholds and the tuning apply to a running session; a change of
 //! `device`, `cpi`, `report_limit` or `grab` needs a new one
-//! ([`Settings::restart_needed`]).
+//! ([`Config::restart_needed`]).
 //!
 //! When the device cannot be opened, the driver alerts the bus with
 //! what to do (pick a device with the `device` setting, fix the permissions,
@@ -68,7 +68,7 @@ use flightrelay::{Handedness, Mode, Severity, Source};
 
 use crate::client::{Client, Event, Shot};
 use crate::club::{Club, Hand, UnknownClub};
-use crate::config::Settings;
+use crate::config::Config;
 use crate::device;
 use crate::error::Error;
 use crate::input::{DeviceInfo, Input};
@@ -95,10 +95,10 @@ type Opener = Arc<dyn Fn(Option<&str>, bool) -> Result<BoxedInput, Error> + Send
 
 /// The trackball launch monitor. See the [module docs](self).
 pub struct Thumbswing {
-    settings: Settings,
+    settings: Config,
     /// The settings a running session follows (club, hand, thresholds and
     /// tuning).
-    live: Live<Settings>,
+    live: Live<Config>,
     ids: ShotIds,
     /// Opens the device: [`device::open_setting`], or a test's inputs.
     opener: Opener,
@@ -147,7 +147,7 @@ impl Thumbswing {
     /// # Errors
     /// The [`ConfigError`] of settings that are not valid.
     pub fn with_input(
-        settings: Settings,
+        settings: Config,
         input: impl Input + Send + 'static,
     ) -> Result<Self, ConfigError> {
         let mut driver = Self::new(settings)?;
@@ -165,13 +165,13 @@ impl Thumbswing {
         &mut self,
         input: impl Input + Send + 'static,
         hints: &TurnHints,
-    ) -> Session {
+    ) -> ThumbswingSession {
         self.session(Box::new(input), *hints)
     }
 
     /// A driver whose [`connect`](FrpDriver::connect) gets its inputs from
     /// `open` instead of the evdev devices: `open` is called with the
-    /// [`device`](Settings::device) value and the grab, for every connect
+    /// [`device`](Config::device) value and the grab, for every connect
     /// and, with `device` unset, for every reopen after an unplug. For tests
     /// of the connect and reconnect paths without hardware.
     ///
@@ -179,7 +179,7 @@ impl Thumbswing {
     /// The [`ConfigError`] of settings that are not valid.
     #[cfg(feature = "testing")]
     pub fn with_opener(
-        settings: Settings,
+        settings: Config,
         open: impl Fn(Option<&str>, bool) -> Result<BoxedInput, Error> + Send + Sync + 'static,
     ) -> Result<Self, ConfigError> {
         let mut driver = Self::new(settings)?;
@@ -214,7 +214,7 @@ impl Thumbswing {
         }
     }
 
-    fn session(&self, input: BoxedInput, hints: TurnHints) -> Session {
+    fn session(&self, input: BoxedInput, hints: TurnHints) -> ThumbswingSession {
         let info = input.info();
         let name = if info.name.is_empty() {
             KIND.to_owned()
@@ -226,8 +226,9 @@ impl Thumbswing {
             .with_model(MODEL)
             .with_firmware(env!("CARGO_PKG_VERSION"))
             .with_label(format!("thumbswing ({name})"));
-        let client = Client::with_tuning(input, self.settings.config.clone(), self.settings.tuning);
-        let mut session = Session {
+        let client =
+            Client::with_tuning(input, self.settings.detector.clone(), self.settings.tuning);
+        let mut session = ThumbswingSession {
             client,
             identity,
             input_name: name,
@@ -308,25 +309,25 @@ impl Input for Reselect {
 }
 
 impl FrpDriver for Thumbswing {
-    type Config = Settings;
+    type Config = Config;
     type Error = Error;
     type Action = NoAction;
-    type Session = Session;
+    type Session = ThumbswingSession;
 
     /// Opening a device is a few syscalls, and closing joins the reader
     /// thread, which wakes every 100 ms.
     const STOP_WAIT: Duration = Duration::from_secs(1);
 
-    fn info(config: &Settings) -> DriverInfo {
+    fn info(config: &Config) -> DriverInfo {
         let info = DriverInfo::new(KIND, MODEL, Source::Virtual).with_manufacturer(MANUFACTURER);
-        if config.config.grab {
+        if config.detector.grab {
             info.exclusive()
         } else {
             info
         }
     }
 
-    fn new(config: Settings) -> Result<Self, ConfigError> {
+    fn new(config: Config) -> Result<Self, ConfigError> {
         DriverConfig::validate(&config)?;
         Ok(Self {
             live: Live::new(config.clone()),
@@ -341,11 +342,11 @@ impl FrpDriver for Thumbswing {
         })
     }
 
-    fn config(&self) -> &Settings {
+    fn config(&self) -> &Config {
         &self.settings
     }
 
-    fn connect(&mut self, ctx: &mut ConnectCtx<'_>) -> Result<Session, Error> {
+    fn connect(&mut self, ctx: &mut ConnectCtx<'_>) -> Result<ThumbswingSession, Error> {
         ctx.tick()?;
         ctx.out.phase("connecting");
         let input: BoxedInput = if let Some(given) = self.given.take() {
@@ -356,7 +357,7 @@ impl FrpDriver for Thumbswing {
                 "the input given to the driver has been served".to_owned(),
             ));
         } else {
-            let grab = self.settings.config.grab;
+            let grab = self.settings.detector.grab;
             let input = (self.opener)(self.settings.device(), grab)?;
             let info = input.info();
             ctx.out.log(
@@ -415,21 +416,21 @@ impl FrpDriver for Thumbswing {
         }
     }
 
-    fn apply_config(&mut self, new: &Settings) {
+    fn apply_config(&mut self, new: &Config) {
         self.settings = new.clone();
         self.live.set(new.clone());
     }
 }
 
 /// A connected trackball (or the input a driver was given).
-pub struct Session {
+pub struct ThumbswingSession {
     client: Client<BoxedInput>,
     identity: DeviceIdentity,
     input_name: String,
     ids: ShotIds,
-    live: Live<Settings>,
+    live: Live<Config>,
     /// The settings in effect.
-    applied: Settings,
+    applied: Config,
     /// The hints of the current turn.
     hints: TurnHints,
     /// Whether the session's telemetry has been sent.
@@ -440,9 +441,9 @@ pub struct Session {
     handed_due: bool,
 }
 
-impl std::fmt::Debug for Session {
+impl std::fmt::Debug for ThumbswingSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Session")
+        f.debug_struct("ThumbswingSession")
             .field("identity", &self.identity)
             .field("club", &self.client.club())
             .field("hand", &self.client.hand())
@@ -450,7 +451,7 @@ impl std::fmt::Debug for Session {
     }
 }
 
-impl Session {
+impl ThumbswingSession {
     /// The client underneath: the club, hand, tuning and swing state in use.
     #[must_use]
     pub fn client(&self) -> &Client<BoxedInput> {
@@ -475,7 +476,7 @@ impl Session {
             out.telemetry([
                 ("synthetic", "true".to_owned()),
                 ("input", self.input_name.clone()),
-                ("cpi", format!("{}", self.applied.config.cpi)),
+                ("cpi", format!("{}", self.applied.detector.cpi)),
                 self.profile(),
                 self.handed(),
             ]);
@@ -538,11 +539,11 @@ impl Session {
             *self.client.tuning_mut() = live.tuning;
             self.applied.tuning = live.tuning;
         }
-        if live.config.thresholds != self.applied.config.thresholds {
-            let mut config = self.client.config().clone();
-            config.thresholds = live.config.thresholds;
-            self.client.set_config(config)?;
-            self.applied.config.thresholds = live.config.thresholds;
+        if live.detector.thresholds != self.applied.detector.thresholds {
+            let mut config = self.client.detector_config().clone();
+            config.thresholds = live.detector.thresholds;
+            self.client.set_detector_config(config)?;
+            self.applied.detector.thresholds = live.detector.thresholds;
         }
         Ok(())
     }
@@ -620,7 +621,7 @@ impl Session {
     }
 }
 
-impl FrpSession for Session {
+impl FrpSession for ThumbswingSession {
     type Error = Error;
     type Action = NoAction;
 
@@ -704,23 +705,23 @@ mod tests {
 
     #[test]
     fn info_is_virtual_and_exclusive_only_with_the_grab() {
-        let mut settings = Settings::default();
+        let mut settings = Config::default();
         let info = Thumbswing::info(&settings);
         assert_eq!(info.source, Source::Virtual);
         assert_eq!(info.kind, KIND);
         assert_eq!(info.manufacturer, Some(MANUFACTURER));
         assert!(info.raw.is_none(), "no wire protocol, no raw frames");
         assert!(info.exclusive);
-        settings.config.grab = false;
+        settings.detector.grab = false;
         assert!(!Thumbswing::info(&settings).exclusive);
     }
 
     #[test]
     fn new_refuses_invalid_settings_without_opening_anything() {
-        let mut settings = Settings::default();
+        let mut settings = Config::default();
         settings.tuning.power_gamma = 0.0;
         let e = Thumbswing::new(settings).unwrap_err();
         assert_eq!(e.field.as_deref(), Some("tuning.power_gamma"));
-        assert!(Thumbswing::new(Settings::default()).is_ok());
+        assert!(Thumbswing::new(Config::default()).is_ok());
     }
 }

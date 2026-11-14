@@ -12,10 +12,10 @@ use flightrelay::driver::{
 use flightrelay::testing::{TestHost, bodies, status, statuses};
 use flightrelay::types::blockers;
 use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey};
-use thumbswing::driver::{Session, Thumbswing};
+use thumbswing::driver::{Thumbswing, ThumbswingSession};
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::testing::{StreamBuilder, synthetic_recording};
-use thumbswing::{DeviceInfo, Error, Input, Sample, Settings};
+use thumbswing::{Config, DeviceInfo, Error, Input, Sample};
 
 /// Two swings: straight at full power, then a pull 20° left and a push 5°
 /// right at 75 %.
@@ -41,7 +41,7 @@ fn steps_for(rec: &Recording) -> usize {
 
 /// Steps `session` `steps` times at the host's instant (a fast replay's
 /// clock is its input's, so the host's does not move) and takes the events.
-fn play(session: &mut Session, host: &mut TestHost, steps: usize) -> Vec<DeviceEvent> {
+fn play(session: &mut ThumbswingSession, host: &mut TestHost, steps: usize) -> Vec<DeviceEvent> {
     for _ in 0..steps {
         host.with(|now, out| session.step(now, out)).unwrap();
     }
@@ -67,7 +67,7 @@ fn ready_values(events: &[DeviceEvent]) -> Vec<bool> {
 }
 
 /// Gives `session` the hints of a turn.
-fn turn(session: &mut Session, host: &mut TestHost, hints: TurnHints) {
+fn turn(session: &mut ThumbswingSession, host: &mut TestHost, hints: TurnHints) {
     host.with(|_, out| session.hints(&hints, out)).unwrap();
 }
 
@@ -82,7 +82,7 @@ fn shot_keys(events: &[&FrpBody]) -> Vec<u32> {
 }
 
 fn driver() -> Thumbswing {
-    Thumbswing::new(Settings::default()).unwrap()
+    Thumbswing::new(Config::default()).unwrap()
 }
 
 #[test]
@@ -292,17 +292,17 @@ fn tuning_and_thresholds_apply_to_a_running_session() {
     let rec = two_swings();
     let mut driver = driver();
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
-    let mut slower = Settings::default();
+    let mut slower = Config::default();
     slower.tuning.max_club_speed = 50.0;
-    slower.config.thresholds.gap_ms = 60;
-    assert!(!Settings::restart_needed(&Settings::default(), &slower));
+    slower.detector.thresholds.gap_ms = 60;
+    assert!(!Config::restart_needed(&Config::default(), &slower));
     driver.apply_config(&slower);
     assert_eq!(driver.config(), &slower);
 
     let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
     let events = bodies(&events);
     assert!((session.client().tuning().max_club_speed - 50.0).abs() < f64::EPSILON);
-    assert_eq!(session.client().config().thresholds.gap_ms, 60);
+    assert_eq!(session.client().detector_config().thresholds.gap_ms, 60);
     let club_speeds: Vec<f64> = events
         .iter()
         .filter_map(|e| match e {
@@ -326,9 +326,9 @@ fn every_fixture_plays_through_the_driver() {
         let rec = Recording::load(&path).unwrap();
         let expect =
             thumbswing::testing::Expectations::load(path.with_extension("expect.json")).unwrap();
-        let mut settings = Settings::default();
-        settings.config.cpi = rec.header.cpi;
-        settings.config.report_limit = rec.header.report_limit;
+        let mut settings = Config::default();
+        settings.detector.cpi = rec.header.cpi;
+        settings.detector.report_limit = rec.header.report_limit;
         let mut driver = Thumbswing::new(settings).unwrap();
         let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
         let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
@@ -405,7 +405,7 @@ fn connect_serves_a_given_input_once_and_honors_stop() {
     let mut host = TestHost::new()
         .with_hints(TurnHints::default().with_club(flightrelay::Club::PitchingWedge));
     let mut driver =
-        Thumbswing::with_input(Settings::default(), Replay::new(&rec, Pace::Fast)).unwrap();
+        Thumbswing::with_input(Config::default(), Replay::new(&rec, Pace::Fast)).unwrap();
 
     let session = host.connect(&mut driver).unwrap();
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
@@ -451,18 +451,16 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
         Some(Duration::from_secs(1))
     );
     assert_eq!(Thumbswing::STOP_WAIT, Duration::from_secs(1));
-    assert!(Settings::default().validate().is_ok());
-    assert!(DriverConfig::validate(&Settings::default()).is_ok());
+    assert!(Config::default().validate().is_ok());
+    assert!(DriverConfig::validate(&Config::default()).is_ok());
 }
 
 #[test]
 fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     let rec = two_swings();
-    let mut settings = Settings {
-        club: thumbswing::Club::Driver,
-        hand: thumbswing::Hand::Left,
-        ..Settings::default()
-    };
+    let mut settings = Config::default();
+    settings.club = thumbswing::Club::Driver;
+    settings.hand = thumbswing::Hand::Left;
     let mut driver = Thumbswing::new(settings.clone()).unwrap();
     let mut host = TestHost::new();
 
@@ -657,7 +655,7 @@ fn a_choice_left_to_the_user_is_alerted_once_per_outage() {
         }),
     ];
     let queue = std::sync::Mutex::new(results.into_iter());
-    let mut driver = Thumbswing::with_opener(Settings::default(), move |_, _| {
+    let mut driver = Thumbswing::with_opener(Config::default(), move |_, _| {
         match queue.lock().unwrap().next() {
             Some(Ok(())) => {
                 Ok(Box::new(Replay::new(&two_swings(), Pace::Fast)) as Box<dyn Input + Send>)
@@ -764,7 +762,7 @@ fn gone_at(node: &str, by_id: &[&str], name: &str) -> Box<dyn Input + Send> {
 }
 
 /// Connects `driver` once, through its opener.
-fn connect(driver: &mut Thumbswing) -> Result<Session, Error> {
+fn connect(driver: &mut Thumbswing) -> Result<ThumbswingSession, Error> {
     TestHost::new().connect(driver)
 }
 
@@ -772,7 +770,7 @@ fn connect(driver: &mut Thumbswing) -> Result<Session, Error> {
 fn with_no_device_named_an_unplug_chooses_the_device_again() {
     let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = std::sync::Arc::clone(&opened);
-    let mut driver = Thumbswing::with_opener(Settings::default(), move |device, grab| {
+    let mut driver = Thumbswing::with_opener(Config::default(), move |device, grab| {
         let mut log = log.lock().unwrap();
         log.push((device.map(str::to_owned), grab));
         // The connect opens it; the first reopen finds nothing, as if it
@@ -802,10 +800,8 @@ fn with_no_device_named_an_unplug_chooses_the_device_again() {
 fn a_named_device_is_reopened_by_its_name_not_chosen_again() {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let count = std::sync::Arc::clone(&calls);
-    let settings = Settings {
-        device: Some("usb-ball".into()),
-        ..Settings::default()
-    };
+    let mut settings = Config::default();
+    settings.device = Some("usb-ball".into());
     let mut driver = Thumbswing::with_opener(settings, move |device, _| {
         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         assert_eq!(device, Some("usb-ball"));
@@ -824,7 +820,7 @@ const LINK_NAME: &str = "usb-Example_Trackball_SERIAL123-event-mouse";
 
 #[test]
 fn the_device_id_is_the_by_id_link_name() {
-    let mut driver = Thumbswing::with_opener(Settings::default(), |_, _| {
+    let mut driver = Thumbswing::with_opener(Config::default(), |_, _| {
         Ok(gone_at(
             "/dev/input/event7",
             &[
@@ -845,7 +841,7 @@ fn the_device_id_is_the_by_id_link_name() {
 
 #[test]
 fn without_a_by_id_link_the_device_id_is_the_reported_name() {
-    let mut driver = Thumbswing::with_opener(Settings::default(), |_, _| {
+    let mut driver = Thumbswing::with_opener(Config::default(), |_, _| {
         Ok(gone_at("/dev/input/event7", &[], "Built-in Pointer"))
     })
     .unwrap();
@@ -853,7 +849,7 @@ fn without_a_by_id_link_the_device_id_is_the_reported_name() {
     assert_eq!(session.identity().device, "Built-in Pointer");
 
     // A link with no file name is no id either.
-    let mut driver = Thumbswing::with_opener(Settings::default(), |_, _| {
+    let mut driver = Thumbswing::with_opener(Config::default(), |_, _| {
         Ok(gone_at("/dev/input/event7", &["/"], "Built-in Pointer"))
     })
     .unwrap();
@@ -869,7 +865,7 @@ fn the_device_id_is_the_same_after_a_replug() {
     // time.
     let opened = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
     let count = std::sync::Arc::clone(&opened);
-    let mut driver = Thumbswing::with_opener(Settings::default(), move |_, _| {
+    let mut driver = Thumbswing::with_opener(Config::default(), move |_, _| {
         let node = match count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
             0 => "/dev/input/event7",
             1 => "/dev/input/event9",
@@ -895,10 +891,8 @@ fn the_device_id_is_the_same_after_a_replug() {
     assert_eq!(session.identity().device, LINK_NAME);
 
     // Named by its link, it gets the same id.
-    let settings = Settings {
-        device: Some(LINK_NAME.into()),
-        ..Settings::default()
-    };
+    let mut settings = Config::default();
+    settings.device = Some(LINK_NAME.into());
     let mut driver = Thumbswing::with_opener(settings, |_, _| {
         Ok(gone_at("/dev/input/event4", &[LINK], "Example Trackball"))
     })

@@ -8,7 +8,7 @@
 //!
 //! ```
 //! use thumbswing::testing::{Clock, StreamBuilder};
-//! use thumbswing::{Config, Output, Segmenter};
+//! use thumbswing::{DetectorConfig, Output, Segmenter};
 //!
 //! // 1.5 in straight back over 150 ms, a 300 ms pause, 1.5 in straight forward
 //! // over 100 ms (15 in/s), at 125 Hz and 400 CPI.
@@ -17,7 +17,7 @@
 //!     .pause_ms(300.0)
 //!     .push(0.0, 600.0, 100.0)
 //!     .build();
-//! let mut seg = Segmenter::new(&Config::default(), 15.0);
+//! let mut seg = Segmenter::new(&DetectorConfig::default(), 15.0);
 //! let mut clock = Clock::new();
 //! let mut out = clock.feed(&mut seg, &samples);
 //! out.extend(clock.pause_ms(&mut seg, 500));

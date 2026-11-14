@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::testing::{Expectations, StreamBuilder, jitter, synthetic_recording};
-use thumbswing::{CancelReason, Client, Config, Event, Sample, Swing};
+use thumbswing::{CancelReason, Client, DetectorConfig, Event, Sample, Swing};
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -18,11 +18,9 @@ fn dir() -> PathBuf {
 
 /// Replay a recording through a client configured from its header.
 fn replay(rec: &Recording) -> (Vec<Swing>, Vec<CancelReason>) {
-    let config = Config {
-        cpi: rec.header.cpi,
-        report_limit: rec.header.report_limit,
-        ..Config::default()
-    };
+    let mut config = DetectorConfig::default();
+    config.cpi = rec.header.cpi;
+    config.report_limit = rec.header.report_limit;
     let mut client = Client::new(Replay::new(rec, Pace::Fast), config);
     let (mut swings, mut cancels) = (Vec::new(), Vec::new());
     while !client.input().finished() {

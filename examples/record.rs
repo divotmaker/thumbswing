@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use session::Args;
 use thumbswing::recording::{Header, Recorder};
-use thumbswing::{Client, Config, DeviceInfo, Error, Event, Input, Sample, device};
+use thumbswing::{Client, DetectorConfig, DeviceInfo, Error, Event, Input, Sample, device};
 
 /// Passes samples through to the client and writes each to the recording.
 struct Tee<I: Input, W: Write> {
@@ -136,12 +136,10 @@ fn main() -> ExitCode {
         }
     });
 
-    let config = Config {
-        cpi,
-        report_limit: header.report_limit,
-        grab,
-        ..Config::default()
-    };
+    let mut config = DetectorConfig::default();
+    config.cpi = cpi;
+    config.report_limit = header.report_limit;
+    config.grab = grab;
     let tee = Tee {
         inner: dev,
         rec,

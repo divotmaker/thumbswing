@@ -10,7 +10,7 @@
 //! The settings are the keys of `thumbswing-frp --set` (`thumbswing-frp --help`
 //! lists them with their defaults): `device`, `club`, `hand`, `cpi`,
 //! `report_limit`, `grab`, `thresholds.*` and `tuning.*`, checked by
-//! [`Settings::validate`]. Without `device` the only readable trackball or
+//! [`Config::validate`]. Without `device` the only readable trackball or
 //! mouse is used; with more than one it lists them and asks for `device`.
 //! `--replay FILE` plays a recording in real time instead, with `cpi` and
 //! `report_limit` from its header unless given. Ctrl-C quits.
@@ -29,7 +29,7 @@ use std::time::Duration;
 use flightrelay::config::DriverConfig;
 use serde_json::{Map, Value};
 use thumbswing::recording::{Pace, Recording, Replay};
-use thumbswing::{Client, Event, Input, Settings};
+use thumbswing::{Client, Config, Event, Input};
 
 const USAGE: &str =
     "usage: monitor [--replay FILE] [key=value]…  (the keys of thumbswing-frp --set)";
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
 
 /// What the command line asks for.
 struct Opts {
-    settings: Settings,
+    settings: Config,
     /// The keys the command line gave, as a settings table.
     given: Map<String, Value>,
     replay: Option<String>,
@@ -81,7 +81,7 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Opts, String> {
             return Err(format!("unexpected argument {arg:?}\n{USAGE}"));
         }
     }
-    let settings = Settings::from_map(given.clone()).map_err(|e| e.to_string())?;
+    let settings = Config::from_map(given.clone()).map_err(|e| e.to_string())?;
     Ok(Opts {
         settings,
         given,
@@ -103,7 +103,7 @@ fn run() -> Result<(), String> {
         return Err("device and --replay cannot be used together".to_owned());
     }
 
-    let mut config = settings.config.clone();
+    let mut config = settings.detector.clone();
     let input: Box<dyn Input> = if let Some(path) = &replay {
         let rec = Recording::load(path).map_err(|e| e.to_string())?;
         if !given.contains_key("cpi") {

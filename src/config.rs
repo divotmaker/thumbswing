@@ -1,8 +1,8 @@
-//! Device configuration, segmenter thresholds, the tuning knobs, and
-//! [`Settings`], all of them plus the choice of device.
+//! The detector configuration, segmenter thresholds, the tuning knobs, and
+//! [`Config`], all of them plus the choice of device.
 //!
 //! With the `config` feature every type here is a serde struct: a field at its
-//! default is left out when written, so a default [`Settings`] serializes to
+//! default is left out when written, so a default [`Config`] serializes to
 //! nothing, and every field is optional when read.
 
 #[cfg(feature = "config")]
@@ -44,6 +44,7 @@ impl CurveSense {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(default))]
+#[non_exhaustive]
 pub struct Tuning {
     /// Forward peak speed that counts as 100 % power, inches per second.
     /// Every segmenter threshold is a fraction of it.
@@ -149,6 +150,7 @@ impl Default for Tuning {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(default))]
+#[non_exhaustive]
 pub struct Thresholds {
     /// Trailing window the speed is measured over, ms.
     #[cfg_attr(
@@ -264,12 +266,15 @@ impl Default for Thresholds {
     }
 }
 
-/// Device configuration. Changes need the input reopened, except the
-/// thresholds, which the segmenter reads on every report.
+/// How a [`Client`](crate::Client) reads the input and detects swings: counts
+/// per inch, the report limit, the exclusive grab and the segmentation
+/// thresholds. A change needs the input reopened, except the thresholds, which
+/// the segmenter reads on every report.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(default))]
-pub struct Config {
+#[non_exhaustive]
+pub struct DetectorConfig {
     /// Counts per inch of ball surface travel.
     #[cfg_attr(feature = "config", serde(skip_serializing_if = "skip::config::cpi"))]
     pub cpi: f64,
@@ -291,7 +296,7 @@ pub struct Config {
     pub thresholds: Thresholds,
 }
 
-impl Default for Config {
+impl Default for DetectorConfig {
     fn default() -> Self {
         Self {
             cpi: 400.0,
@@ -303,11 +308,11 @@ impl Default for Config {
 }
 
 /// Everything a thumbswing device runs with: which input to read, the club
-/// and hand it starts with, its [`Config`] and the [`Tuning`].
+/// and hand it starts with, its [`DetectorConfig`] and the [`Tuning`].
 ///
 /// This is the driver's config (the `driver` feature). With the `config`
 /// feature it is a serde struct whose keys are `device`, `club`, `hand`, the
-/// [`Config`] fields at the top level (`cpi`, `report_limit`, `grab`, a
+/// [`DetectorConfig`] fields at the top level (`cpi`, `report_limit`, `grab`, a
 /// `thresholds` table) and a `tuning` table, e.g. in TOML:
 ///
 /// ```toml
@@ -322,7 +327,8 @@ impl Default for Config {
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(default))]
-pub struct Settings {
+#[non_exhaustive]
+pub struct Config {
     /// The input to read: a `/dev/input` path, a `/dev/input/by-id` name, or
     /// the name the device reports. Unset (or blank): the only readable
     /// trackball or mouse; with more than one, opening fails and lists them.
@@ -348,7 +354,7 @@ pub struct Settings {
     pub hand: Hand,
     /// CPI, report limit, grab and the segmentation thresholds.
     #[cfg_attr(feature = "config", serde(flatten))]
-    pub config: Config,
+    pub detector: DetectorConfig,
     /// The tuning knobs.
     #[cfg_attr(
         feature = "config",
@@ -357,7 +363,7 @@ pub struct Settings {
     pub tuning: Tuning,
 }
 
-impl Settings {
+impl Config {
     /// The `device` value, or `None` when it is unset or blank.
     #[must_use]
     pub fn device(&self) -> Option<&str> {
@@ -373,7 +379,7 @@ impl Settings {
     /// The first field out of range, named by its key (`cpi`,
     /// `thresholds.v_stop`, `tuning.power_gamma`, …).
     pub fn validate(&self) -> Result<(), InvalidSetting> {
-        self.config.validate()?;
+        self.detector.validate()?;
         self.tuning.validate()
     }
 
@@ -381,15 +387,15 @@ impl Settings {
     /// of `device`, `cpi`, `report_limit` or `grab`. The club, the hand, the
     /// thresholds and the tuning apply to a running session.
     #[must_use]
-    pub fn restart_needed(&self, new: &Settings) -> bool {
+    pub fn restart_needed(&self, new: &Config) -> bool {
         self.device() != new.device()
-            || self.config.cpi.to_bits() != new.config.cpi.to_bits()
-            || self.config.report_limit != new.config.report_limit
-            || self.config.grab != new.config.grab
+            || self.detector.cpi.to_bits() != new.detector.cpi.to_bits()
+            || self.detector.report_limit != new.detector.report_limit
+            || self.detector.grab != new.detector.grab
     }
 }
 
-/// A setting out of range, from [`Settings::validate`].
+/// A setting out of range, from [`Config::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{field}: {message}")]
 #[non_exhaustive]
@@ -440,7 +446,7 @@ fn at_least(field: &'static str, v: u32, min: u32) -> Result<(), InvalidSetting>
     }
 }
 
-impl Config {
+impl DetectorConfig {
     /// Range checks of the CPI, the report limit and the thresholds, and
     /// `v_stop` below `v_start`.
     ///
@@ -502,9 +508,9 @@ impl From<InvalidSetting> for flightrelay::config::ConfigError {
 }
 
 #[cfg(feature = "config")]
-impl flightrelay::config::DriverConfig for Settings {
+impl flightrelay::config::DriverConfig for Config {
     fn validate(&self) -> Result<(), flightrelay::config::ConfigError> {
-        Ok(Settings::validate(self)?)
+        Ok(Config::validate(self)?)
     }
 
     fn restart_needed(old: &Self, new: &Self) -> bool {
@@ -535,7 +541,7 @@ mod skip {
     }
 
     pub(crate) mod config {
-        at_default!(Config {
+        at_default!(DetectorConfig {
             cpi: f64,
             report_limit: i32,
             grab: bool

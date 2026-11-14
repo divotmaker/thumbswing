@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use crate::club::{Club, Hand};
-use crate::config::{Config, Tuning};
+use crate::config::{DetectorConfig, Tuning};
 use crate::error::Error;
 use crate::input::Input;
 use crate::launch::{Delivery, Launch};
@@ -77,7 +77,7 @@ pub enum Event {
 #[derive(Debug)]
 pub struct Client<I: Input> {
     input: I,
-    config: Config,
+    config: DetectorConfig,
     tuning: Tuning,
     smash: Smash,
     seg: Segmenter,
@@ -94,12 +94,12 @@ pub struct Client<I: Input> {
 
 impl<I: Input> Client<I> {
     /// A client over `input` with `config` and the default [`Tuning`].
-    pub fn new(input: I, config: Config) -> Self {
+    pub fn new(input: I, config: DetectorConfig) -> Self {
         Self::with_tuning(input, config, Tuning::default())
     }
 
     /// A client over `input` with `config` and `tuning`.
-    pub fn with_tuning(input: I, config: Config, tuning: Tuning) -> Self {
+    pub fn with_tuning(input: I, config: DetectorConfig, tuning: Tuning) -> Self {
         let seg = Segmenter::new(&config, tuning.full_power_speed);
         Self {
             input,
@@ -249,20 +249,20 @@ impl<I: Input> Client<I> {
         &mut self.tuning
     }
 
-    /// The device configuration.
+    /// The detector configuration.
     #[must_use]
-    pub fn config(&self) -> &Config {
+    pub fn detector_config(&self) -> &DetectorConfig {
         &self.config
     }
 
-    /// Change the configuration: thresholds, CPI and report limit apply at
+    /// Change the detector configuration: thresholds, CPI and report limit apply at
     /// once; a change of `grab` is applied to the input.
     ///
     /// # Errors
     /// [`Error::Busy`] if a grab was asked for and another process holds it.
-    pub fn set_config(&mut self, config: Config) -> Result<(), Error> {
+    pub fn set_detector_config(&mut self, config: DetectorConfig) -> Result<(), Error> {
         let grab_changed = config.grab != self.config.grab;
-        self.seg.set_config(&config);
+        self.seg.set_detector_config(&config);
         self.config = config;
         if grab_changed {
             self.input.set_grab(self.config.grab)?;

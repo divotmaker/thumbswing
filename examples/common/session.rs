@@ -115,7 +115,7 @@ pub fn status_line<I: Input>(client: &Client<I>, last: Option<&Shot>) -> String 
         client.club(),
         client.hand()
     );
-    if !client.config().grab {
+    if !client.detector_config().grab {
         s.push_str(" | grab off");
     }
     if let Some(shot) = last {

@@ -149,10 +149,8 @@ fn launch_of(row: &Row) -> Launch {
         fwd_peak_in_s: row.peak,
         ..Swing::default()
     };
-    let tuning = Tuning {
-        curve_sense: row.sense,
-        ..Tuning::default()
-    };
+    let mut tuning = Tuning::default();
+    tuning.curve_sense = row.sense;
     let d = delivery(&swing, row.club, Hand::Right, &tuning);
     launch_for(&d, row.club, &Smash::LOFT_LINEAR)
 }

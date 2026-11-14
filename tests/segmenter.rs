@@ -5,8 +5,8 @@ use thumbswing::launch::face_weight;
 use thumbswing::recording::{Pace, Replay};
 use thumbswing::testing::{Clock, StreamBuilder, jitter, synthetic_recording};
 use thumbswing::{
-    CancelReason, Client, Club, Config, CurveSense, Event, Output, Phase, Sample, Segmenter, Shot,
-    Swing, Tuning,
+    CancelReason, Client, Club, CurveSense, DetectorConfig, Event, Output, Phase, Sample,
+    Segmenter, Shot, Swing, Tuning,
 };
 
 const RATES: [f64; 2] = [125.0, 1000.0];
@@ -23,13 +23,13 @@ fn push_counts(peak: f64) -> f64 {
 }
 
 fn run(samples: &[Sample], tail_ms: u64) -> (Vec<Output>, Segmenter) {
-    run_with(samples, tail_ms, &Config::default(), 30.0)
+    run_with(samples, tail_ms, &DetectorConfig::default(), 30.0)
 }
 
 fn run_with(
     samples: &[Sample],
     tail_ms: u64,
-    config: &Config,
+    config: &DetectorConfig,
     full: f64,
 ) -> (Vec<Output>, Segmenter) {
     let mut seg = Segmenter::new(config, full);
@@ -69,7 +69,11 @@ fn basic(rate: f64, b: f64, f: f64, peak: f64, pause_ms: f64) -> Vec<Sample> {
 /// Run samples through a client (fast replay) and return the events.
 fn client_events(samples: &[Sample], club: Club, tuning: Tuning) -> Vec<Event> {
     let rec = synthetic_recording(samples, &[], CPI, 125.0);
-    let mut client = Client::with_tuning(Replay::new(&rec, Pace::Fast), Config::default(), tuning);
+    let mut client = Client::with_tuning(
+        Replay::new(&rec, Pace::Fast),
+        DetectorConfig::default(),
+        tuning,
+    );
     client.set_club(club);
     let mut events = Vec::new();
     while !client.input().finished() {
@@ -145,22 +149,21 @@ fn pull_left_push_straight_fades_in_arcade_sense_and_draws_in_physical() {
         assert!(close(d.face_to_path_deg(), 4.0, 0.3), "{rate} Hz");
         assert!(arcade[0].launch.sidespin_rpm > 0.0, "a fade curves right");
 
-        let phys = Tuning {
-            curve_sense: CurveSense::Physical,
-            ..Tuning::default()
-        };
+        let mut phys = Tuning::default();
+        phys.curve_sense = CurveSense::Physical;
         let p = shots(&client_events(&samples, Club::Iron7, phys));
         assert!(close(p[0].delivery.path_deg, 4.0, 0.3));
         assert!(close(p[0].delivery.face_to_path_deg(), -4.0, 0.3));
         assert!(p[0].launch.sidespin_rpm < 0.0, "a draw curves left");
 
-        let lh_mirror = Tuning {
-            mirror_for_left_hand: true,
-            ..Tuning::default()
-        };
+        let mut lh_mirror = Tuning::default();
+        lh_mirror.mirror_for_left_hand = true;
         let rec = synthetic_recording(&samples, &[], CPI, rate);
-        let mut client =
-            Client::with_tuning(Replay::new(&rec, Pace::Fast), Config::default(), lh_mirror);
+        let mut client = Client::with_tuning(
+            Replay::new(&rec, Pace::Fast),
+            DetectorConfig::default(),
+            lh_mirror,
+        );
         client.set_hand(thumbswing::Hand::Left);
         let mut events = Vec::new();
         while !client.input().finished() {
@@ -186,10 +189,8 @@ fn push_right_of_a_straight_pull() {
             (CurveSense::Arcade, 4.5, -2.0),
             (CurveSense::Physical, 0.5, 2.0),
         ] {
-            let t = Tuning {
-                curve_sense: sense,
-                ..Tuning::default()
-            };
+            let mut t = Tuning::default();
+            t.curve_sense = sense;
             let s = shots(&client_events(&samples, Club::Iron7, t));
             let d = s[0].delivery;
             let l = s[0].launch;
@@ -482,10 +483,8 @@ fn a_pull_during_cooldown_starts_the_next_swing() {
 fn sensitivity_follows_cpi_and_full_power_speed() {
     // Doubling the CPI halves the counts for the same speed.
     let at = |cpi: f64, scale: f64| {
-        let config = Config {
-            cpi,
-            ..Config::default()
-        };
+        let mut config = DetectorConfig::default();
+        config.cpi = cpi;
         let samples = StreamBuilder::new(1000.0)
             .pull(0.0, counts(1.5) * scale, 150.0)
             .pause_ms(200.0)
@@ -512,7 +511,7 @@ fn sensitivity_follows_cpi_and_full_power_speed() {
         swings(&out).is_empty(),
         "at 30 in/s full power a 1 in/s pull is noise"
     );
-    let (out, _) = run_with(&slow, 3000, &Config::default(), full);
+    let (out, _) = run_with(&slow, 3000, &DetectorConfig::default(), full);
     let s = swings(&out);
     assert_eq!(s.len(), 1, "{out:?}");
     assert!(close(s[0].fwd_peak_in_s / full, 1.0, 0.05));
@@ -539,7 +538,7 @@ fn saturation_is_flagged_and_direction_comes_from_before_it() {
     assert!(close(s[0].fwd_dir_deg, 10.0, 1.0), "{}", s[0].fwd_dir_deg);
 
     let rec = synthetic_recording(&samples, &[], CPI, 125.0);
-    let mut client = Client::new(Replay::new(&rec, Pace::Fast), Config::default());
+    let mut client = Client::new(Replay::new(&rec, Pace::Fast), DetectorConfig::default());
     let mut events = Vec::new();
     while !client.input().finished() {
         while let Some(e) = client.poll().unwrap() {

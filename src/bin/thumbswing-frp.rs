@@ -15,7 +15,7 @@
 //! ```
 //!
 //! The flags are flightrelay's `run` flags (`--config`, `--target`, `--set`,
-//! `--log`, `--help`); every [`thumbswing::Settings`] field is a `--set` key.
+//! `--log`, `--help`); every [`thumbswing::Config`] field is a `--set` key.
 
 use std::process::ExitCode;
 

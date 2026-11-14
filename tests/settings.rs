@@ -1,32 +1,32 @@
-//! `Settings` as a flightrelay driver config: defaults that write nothing,
+//! `Config` as a flightrelay driver config: defaults that write nothing,
 //! optional and nested keys, validation errors that name the field.
 
 use flightrelay::config::{ConfigError, DriverConfig};
 use serde_json::{Map, Value, json};
-use thumbswing::{Club, CurveSense, Hand, Settings};
+use thumbswing::{Club, Config, CurveSense, Hand};
 
 fn map(v: &Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-fn read(v: &Value) -> Result<Settings, ConfigError> {
-    Settings::from_map(map(v))
+fn read(v: &Value) -> Result<Config, ConfigError> {
+    Config::from_map(map(v))
 }
 
 #[test]
 fn a_default_config_writes_nothing_and_reads_back() {
-    assert!(Settings::default().to_map().is_empty());
-    assert_eq!(read(&json!({})).unwrap(), Settings::default());
+    assert!(Config::default().to_map().is_empty());
+    assert_eq!(read(&json!({})).unwrap(), Config::default());
     // Defaults the crate depends on: grab on (the standalone binary), 400 CPI.
-    let d = Settings::default();
-    assert!(d.config.grab);
-    assert!((d.config.cpi - 400.0).abs() < f64::EPSILON);
+    let d = Config::default();
+    assert!(d.detector.grab);
+    assert!((d.detector.cpi - 400.0).abs() < f64::EPSILON);
     assert_eq!(d.device(), None);
     // The 7-iron, right-handed, until a setting or a host says otherwise.
     assert_eq!((d.club, d.hand), (Club::Iron7, Hand::Right));
     assert_eq!(
         read(&json!({ "club": "7I", "hand": "rh" })).unwrap(),
-        Settings::default()
+        Config::default()
     );
 }
 
@@ -47,13 +47,11 @@ fn club_and_hand_are_set_by_code() {
 
 #[test]
 fn changed_fields_are_written_alone_and_read_back() {
-    let mut s = Settings {
-        device: Some("usb-Example_Trackball-event-mouse".to_owned()),
-        ..Settings::default()
-    };
-    s.config.cpi = 800.0;
-    s.config.grab = false;
-    s.config.thresholds.gap_ms = 60;
+    let mut s = Config::default();
+    s.device = Some("usb-Example_Trackball-event-mouse".to_owned());
+    s.detector.cpi = 800.0;
+    s.detector.grab = false;
+    s.detector.thresholds.gap_ms = 60;
     s.tuning.curve_sense = CurveSense::Physical;
     s.tuning.full_power_speed = 40.0;
     let written = Value::Object(s.to_map());
@@ -77,10 +75,10 @@ fn optional_and_nested_keys_are_set_on_their_own() {
     let s = read(&json!({ "device": "event-ball", "cpi": 1600, "tuning": { "power_gamma": 2 } }))
         .unwrap();
     assert_eq!(s.device(), Some("event-ball"));
-    assert!((s.config.cpi - 1600.0).abs() < f64::EPSILON);
+    assert!((s.detector.cpi - 1600.0).abs() < f64::EPSILON);
     assert!((s.tuning.power_gamma - 2.0).abs() < f64::EPSILON);
     assert_eq!(s.tuning, {
-        let mut t = Settings::default().tuning;
+        let mut t = Config::default().tuning;
         t.power_gamma = 2.0;
         t
     });
@@ -89,7 +87,7 @@ fn optional_and_nested_keys_are_set_on_their_own() {
     // Keys the config does not know are ignored, as flighthook's sections do.
     assert_eq!(
         read(&json!({ "name": "Trackball", "bogus": 1 })).unwrap(),
-        Settings::default()
+        Config::default()
     );
 }
 
@@ -149,17 +147,17 @@ fn invalid_values_name_the_field() {
 
 #[test]
 fn device_fields_restart_and_the_rest_applies_live() {
-    let base = Settings::default();
-    let changed = |f: fn(&mut Settings)| {
+    let base = Config::default();
+    let changed = |f: fn(&mut Config)| {
         let mut s = base.clone();
         f(&mut s);
-        Settings::restart_needed(&base, &s)
+        Config::restart_needed(&base, &s)
     };
     assert!(changed(|s| s.device = Some("event-ball".into())));
-    assert!(changed(|s| s.config.cpi = 800.0));
-    assert!(changed(|s| s.config.report_limit = 2047));
-    assert!(changed(|s| s.config.grab = false));
-    assert!(!changed(|s| s.config.thresholds.v_start = 0.1));
+    assert!(changed(|s| s.detector.cpi = 800.0));
+    assert!(changed(|s| s.detector.report_limit = 2047));
+    assert!(changed(|s| s.detector.grab = false));
+    assert!(!changed(|s| s.detector.thresholds.v_start = 0.1));
     assert!(!changed(|s| s.tuning.curve_gain = 0.3));
     assert!(!changed(|s| s.club = Club::Driver));
     assert!(!changed(|s| s.hand = Hand::Left));
@@ -169,19 +167,19 @@ fn device_fields_restart_and_the_rest_applies_live() {
     );
     // The trait method is the same rule.
     let mut s = base.clone();
-    s.config.cpi = 800.0;
-    assert!(<Settings as DriverConfig>::restart_needed(&base, &s));
+    s.detector.cpi = 800.0;
+    assert!(<Config as DriverConfig>::restart_needed(&base, &s));
 }
 
 #[test]
 fn keys_stay_clear_of_a_host_sections_own() {
     // A host such as flighthook embeds the config flattened next to its own
     // `name`, `enabled` and `impact_lead_s`.
-    let mut every = Settings::example();
-    every.config.cpi = 1.0;
-    every.config.report_limit = 1;
-    every.config.grab = false;
-    every.config.thresholds.gap_ms = 1;
+    let mut every = Config::example();
+    every.detector.cpi = 1.0;
+    every.detector.report_limit = 1;
+    every.detector.grab = false;
+    every.detector.thresholds.gap_ms = 1;
     every.tuning.face_max = 1.0;
     every.club = Club::Driver;
     every.hand = Hand::Left;
@@ -206,7 +204,7 @@ fn keys_stay_clear_of_a_host_sections_own() {
 #[cfg(feature = "frp")]
 #[test]
 fn help_lists_every_key_with_its_default() {
-    let help = Settings::help_toml();
+    let help = Config::help_toml();
     for line in [
         "# device = (unset)",
         "club = \"7I\"",

@@ -4,7 +4,7 @@
 //! [`list`] and [`Device::open`] return [`Error::Unsupported`],
 //! so code that uses them builds everywhere.
 //!
-//! [`open_setting`] opens the input a [`Settings::device`](crate::Settings::device)
+//! [`open_setting`] opens the input a [`Config::device`](crate::Config::device)
 //! value names, and [`choose`] picks the device when none is named.
 
 use std::path::{Path, PathBuf};
