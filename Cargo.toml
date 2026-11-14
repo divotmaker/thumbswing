@@ -19,15 +19,9 @@ flightrelay = { version = "0.6.0", default-features = false, optional = true }
 # Serde on `Settings`, `Config`, `Thresholds`, `Tuning`, `Club` and `Hand`
 # (`config`).
 serde = { version = "1", features = ["derive"], optional = true }
-# `--config` / `--set` for the binary's replay mode; the same crate and major
-# version flightrelay's `main` feature already builds.
-toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "display"], optional = true }
-# Ctrl-C for the binary's replay mode, as flightrelay's `main` feature
-# handles it for the device mode (the same crate).
-ctrlc = { version = "3", features = ["termination"], optional = true }
 
 # Linux evdev backend: open/read/poll and the evdev ioctls, without bindings.
-# Also the Ctrl-C handler of the examples and the binary.
+# Also the Ctrl-C handler of the examples.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 
@@ -46,7 +40,7 @@ config = ["dep:flightrelay", "flightrelay/config", "dep:serde"]
 # `thumbswing::driver`: the `FrpDriver` impl a host such as flighthook runs.
 driver = ["config", "flightrelay/driver"]
 # The `thumbswing-frp` binary: the driver served over FRP.
-frp = ["driver", "flightrelay/server", "flightrelay/main", "dep:toml", "dep:ctrlc"]
+frp = ["driver", "flightrelay/server", "flightrelay/main"]
 # Synthetic swing builders, a manual clock and fixture helpers
 # (`thumbswing::testing`) for tests of code that consumes the crate.
 testing = []
