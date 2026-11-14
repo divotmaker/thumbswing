@@ -67,8 +67,8 @@ fn ready_values(events: &[DeviceEvent]) -> Vec<bool> {
 }
 
 /// Gives `session` the hints of a turn.
-fn turn(session: &mut Session, host: &mut TestHost, hints: &TurnHints) {
-    host.with(|_, out| session.hints(hints, out)).unwrap();
+fn turn(session: &mut Session, host: &mut TestHost, hints: TurnHints) {
+    host.with(|_, out| session.hints(&hints, out)).unwrap();
 }
 
 fn shot_keys(events: &[&FrpBody]) -> Vec<u32> {
@@ -250,7 +250,7 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
     turn(
         &mut session,
         &mut host,
-        &TurnHints::default()
+        TurnHints::default()
             .with_club(flightrelay::Club::Iron7)
             .with_handedness(Handedness::Right),
     );
@@ -264,7 +264,7 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
     turn(
         &mut session,
         &mut host,
-        &TurnHints::default()
+        TurnHints::default()
             .with_mode(Mode::Putting)
             .with_club(flightrelay::Club::Putter),
     );
@@ -494,7 +494,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     turn(
         &mut session,
         &mut host,
-        &TurnHints::default().with_club(flightrelay::Club::PitchingWedge),
+        TurnHints::default().with_club(flightrelay::Club::PitchingWedge),
     );
     let after = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(after.len(), 1, "only the club changed: {after:?}");
@@ -518,7 +518,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     turn(
         &mut session,
         &mut host,
-        &TurnHints::default().with_handedness(Handedness::Right),
+        TurnHints::default().with_handedness(Handedness::Right),
     );
     let dropped = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(dropped.len(), 1, "only the club changed: {dropped:?}");
@@ -542,13 +542,13 @@ fn the_putting_mode_selects_the_putter_whatever_the_club() {
     let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &putting);
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
     let mut host = TestHost::new();
-    turn(&mut session, &mut host, &putting.with_mode(Mode::Full));
+    turn(&mut session, &mut host, putting.with_mode(Mode::Full));
     assert_eq!(session.client().club(), thumbswing::Club::Driver);
     // A turn with the mode only names no club: the setting's.
     turn(
         &mut session,
         &mut host,
-        &TurnHints::default().with_mode(Mode::Full),
+        TurnHints::default().with_mode(Mode::Full),
     );
     assert_eq!(session.client().club(), thumbswing::Club::Iron7);
 }

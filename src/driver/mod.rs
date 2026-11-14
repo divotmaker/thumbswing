@@ -246,7 +246,7 @@ impl Thumbswing {
 }
 
 /// Logs a turn's club code that has no profile.
-fn note_unknown_club(hints: &TurnHints, out: &mut Events<'_>) {
+fn note_unknown_club(hints: TurnHints, out: &mut Events<'_>) {
     if let Some(code) = hints.club
         && let Err(UnknownClub(code)) = Club::try_from(code)
     {
@@ -383,7 +383,7 @@ impl FrpDriver for Thumbswing {
         ctx.tick()?;
         self.alerted = None;
         let hints = *ctx.hints();
-        note_unknown_club(&hints, &mut ctx.out);
+        note_unknown_club(hints, &mut ctx.out);
         Ok(self.session(input, hints))
     }
 
@@ -497,7 +497,7 @@ impl Session {
     /// and hand in play. A club code without a profile is logged and is no
     /// hint.
     fn take_hints(&mut self, hints: TurnHints, out: &mut Events<'_>) {
-        note_unknown_club(&hints, out);
+        note_unknown_club(hints, out);
         self.hints = hints;
         self.select();
     }
