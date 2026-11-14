@@ -12,7 +12,7 @@ use flightrelay::driver::Stop;
 use flightrelay::types::roles;
 use flightrelay::{
     BusActor, EndpointConfig, FrpBody, FrpEndpoint, FrpMessage, FrpServer, GolferTurn, Handedness,
-    Mode, ServerConfig, ServerEvent, Source, Transport,
+    Mode, ServerConfig, ServerEvent, Source, Target,
 };
 use thumbswing::driver::Thumbswing;
 use thumbswing::recording::{Pace, Replay};
@@ -58,7 +58,7 @@ const PEER_ID: &str = "c19e04b7a2d5f318";
 /// every message until two shots have finished.
 fn peer(addr: std::net::SocketAddr) -> Vec<FrpMessage> {
     let url = format!("ws://{addr}/frp");
-    let mut ep = FrpEndpoint::open(EndpointConfig::new(Transport::connect(url))).unwrap();
+    let mut ep = FrpEndpoint::open(EndpointConfig::new(Target::connect(url))).unwrap();
     let mut conn = ep.establish().unwrap();
     let me = FrpMessage::new(
         PEER_ID,
@@ -117,7 +117,7 @@ fn a_peer_gets_the_shots_with_the_club_of_its_turn() {
             let driver = Thumbswing::with_input(settings, input).unwrap();
             FrpServer::new(
                 driver,
-                ServerConfig::new(Transport::listen("127.0.0.1:0"), SERVER_ID),
+                ServerConfig::new(Target::listen("127.0.0.1:0"), SERVER_ID),
             )
             .on_event(move |event| match event {
                 ServerEvent::Listening(addr) => {

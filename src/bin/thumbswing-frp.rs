@@ -23,9 +23,8 @@ use flightrelay::RunOptions;
 use thumbswing::driver::{DEFAULT_TARGET, Thumbswing};
 
 fn main() -> ExitCode {
-    flightrelay::run_with::<Thumbswing>(RunOptions {
-        default_target: DEFAULT_TARGET,
-        program: Some("thumbswing-frp"),
-        ..RunOptions::default()
-    })
+    let mut options = RunOptions::default();
+    options.default_target = DEFAULT_TARGET;
+    options.program = Some("thumbswing-frp");
+    flightrelay::run_with::<Thumbswing>(options)
 }

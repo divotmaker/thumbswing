@@ -6,10 +6,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
-use flightrelay::driver::testing::{TestHost, bodies, status, statuses};
 use flightrelay::driver::{
     Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
 };
+use flightrelay::testing::{TestHost, bodies, status, statuses};
 use flightrelay::types::blockers;
 use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey};
 use thumbswing::driver::{Session, Thumbswing};
@@ -416,11 +416,7 @@ fn connect_serves_a_given_input_once_and_honors_stop() {
     // A served input is not reconnected.
     let mut backoff = Backoff::default();
     let e = Error::Disconnected;
-    let ended = SessionEnd {
-        error: Some(&e),
-        connected_for: Some(Duration::from_secs(1)),
-        attempts: 0,
-    };
+    let ended = SessionEnd::new(Some(&e), Some(Duration::from_secs(1)), 0);
     host.take();
     assert_eq!(
         host.with(|_, out| driver.retry_delay(&ended, &mut backoff, out)),
@@ -442,11 +438,7 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
     let mut host = TestHost::new();
     let mut driver = driver();
     let mut backoff = Backoff::default();
-    let failed = |e| SessionEnd {
-        error: Some(e),
-        connected_for: None,
-        attempts: 1,
-    };
+    let failed = |e| SessionEnd::new(Some(e), None, 1);
     assert_eq!(
         host.with(|_, out| driver.retry_delay(&failed(&Error::Unsupported), &mut backoff, out)),
         None
@@ -597,11 +589,7 @@ fn alerts_for(driver: &mut Thumbswing, error: &Error, backoff: &mut Backoff) -> 
     host.flags.set_min_level(flightrelay::driver::Level::Debug);
     let mut alerts = Vec::new();
     let mut debug = Vec::new();
-    let ended = SessionEnd {
-        error: Some(error),
-        connected_for: None,
-        attempts: 1,
-    };
+    let ended = SessionEnd::new(Some(error), None, 1);
     let delay = host.with(|_, out| driver.retry_delay(&ended, backoff, out));
     for e in host.take() {
         match e {
@@ -685,11 +673,7 @@ fn a_choice_left_to_the_user_is_alerted_once_per_outage() {
     for _ in 0..9 {
         let ended = host.connect(&mut driver).err();
         if let Some(error) = ended {
-            let end = SessionEnd {
-                error: Some(&error),
-                connected_for: None,
-                attempts: 1,
-            };
+            let end = SessionEnd::new(Some(&error), None, 1);
             delays.push(host.with(|_, out| driver.retry_delay(&end, &mut backoff, out)));
         }
     }
