@@ -21,6 +21,7 @@ const RECONNECT_MAX_US: u64 = 5_000_000;
 
 /// A complete synthesized shot.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Shot {
     /// Shot counter, from 1.
     pub number: u32,
@@ -42,6 +43,7 @@ pub struct Shot {
 
 /// What [`Client::poll`] reports.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Event {
     /// The input is open and the client is waiting for a swing (sent first,
     /// and again after a reconnect).

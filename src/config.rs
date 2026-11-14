@@ -15,6 +15,7 @@ use crate::club::{Club, Hand};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "config", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "config", serde(rename_all = "lowercase"))]
+#[non_exhaustive]
 pub enum CurveSense {
     /// The arcade feel: push toward where the ball should start, pull back
     /// from where it should finish. The ball curves toward the backswing line,
@@ -391,6 +392,7 @@ impl Settings {
 /// A setting out of range, from [`Settings::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{field}: {message}")]
+#[non_exhaustive]
 pub struct InvalidSetting {
     /// The key of the field, dotted for nested fields
     /// (`thresholds.v_stop`).

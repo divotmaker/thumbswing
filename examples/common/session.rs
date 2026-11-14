@@ -60,10 +60,9 @@ impl Args {
 pub fn event_line(e: &Event) -> Option<String> {
     Some(match e {
         Event::Ready => "ready: pull back, then push".to_owned(),
-        Event::Backswing { .. } => return None,
         Event::Saturated { reports } => format!(
-            "saturated: {reports} reports at the per-report limit; lower --full-power-speed, \
-             or set --report-limit to the device's real limit"
+            "saturated: {reports} reports at the per-report limit; lower tuning.full_power_speed, \
+             or set report_limit to the device's real limit"
         ),
         Event::Shot(shot) => launch_line(shot),
         Event::Canceled(CancelReason::Dribble) => {
@@ -71,6 +70,7 @@ pub fn event_line(e: &Event) -> Option<String> {
         }
         Event::Canceled(r) => format!("canceled: {r:?}"),
         Event::Disconnected => "device disconnected; waiting for it to come back".to_owned(),
+        _ => return None,
     })
 }
 

@@ -25,6 +25,7 @@
 
 /// Club head state at impact.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub struct Delivery {
     /// Club head speed, mph.
     pub club_speed_mph: f64,
@@ -59,6 +60,7 @@ pub struct ImpactModel {
 
 /// Ball launch conditions.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub struct Launch {
     /// Ball speed, mph.
     pub ball_speed_mph: f64,

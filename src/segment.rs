@@ -46,6 +46,7 @@ use crate::swing::Swing;
 
 /// Why a swing in progress was dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CancelReason {
     /// The backswing kept moving for longer than `back_max_s`.
     Timeout,
@@ -62,6 +63,7 @@ pub enum CancelReason {
 
 /// Where the segmenter is in a swing, for a swing meter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Phase {
     /// Waiting for a backswing.
     Idle,
@@ -77,6 +79,7 @@ pub enum Phase {
 
 /// What the segmenter reports.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Output {
     /// The backswing so far (sent while pulling, and once more when coiled).
     Backswing {

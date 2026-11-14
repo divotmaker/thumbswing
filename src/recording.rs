@@ -68,6 +68,7 @@ impl Default for Header {
 
 /// One line after the header.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Entry {
     /// A report.
     Sample(Sample),
@@ -361,6 +362,7 @@ impl<W: Write> Recorder<W> {
 
 /// How fast a [`Replay`] runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Pace {
     /// As fast as polled: every poll advances the replay clock by 1 ms, and
     /// the input is not [`paced`](Input::paced) until it has been played, so
