@@ -76,6 +76,9 @@ pub use client::{Client, Event, Shot};
 pub use club::{Club, Hand, UnknownClub, UnknownHand};
 pub use config::{Config, CurveSense, DetectorConfig, InvalidSetting, Thresholds, Tuning};
 pub use error::Error;
+/// The flightrelay SDK this crate was built with, so callers name its types at the same version.
+#[cfg(feature = "config")]
+pub use flightrelay;
 pub use input::{DeviceInfo, Input};
 pub use launch::{Delivery, ImpactModel, Launch};
 pub use profile::{CLUB_TABLE, ClubProfile, Smash};
