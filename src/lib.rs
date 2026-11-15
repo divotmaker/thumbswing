@@ -50,6 +50,8 @@
 //! - **`testing`** — `thumbswing::testing`: synthetic swing streams and a
 //!   manual clock.
 
+#![warn(missing_docs)]
+
 mod client;
 mod club;
 mod config;
