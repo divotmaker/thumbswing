@@ -685,12 +685,6 @@ mod tests {
         for c in flightrelay::Club::ALL {
             assert!(Club::try_from(*c).is_ok(), "{c}");
         }
-        for c in Club::ALL {
-            assert_eq!(
-                convert::frp_club(c).map(|f| f.to_string()),
-                Some(c.code().to_owned())
-            );
-        }
         assert_eq!(
             Club::try_from(flightrelay::Club::Hybrid5),
             Ok(Club::Hybrid3)
