@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use flightrelay::config::DriverConfig;
 use flightrelay::driver::{
-    Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
+    Activity, Backoff, DeviceEvent, DeviceStatus, FrpDriver, FrpSession, SessionEnd, StatusChange,
+    TurnHints,
 };
 use flightrelay::testing::{TestHost, bodies, status, statuses};
 use flightrelay::{FrpBody, Handedness, Mode, ShotKey, blockers};
@@ -472,6 +473,26 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
     assert_eq!(Thumbswing::STOP_WAIT, Duration::from_secs(1));
     assert!(Config::default().validate().is_ok());
     assert!(DriverConfig::validate(&Config::default()).is_ok());
+}
+
+#[test]
+fn every_actor_carries_the_declared_telemetry_keys() {
+    let rec = two_swings();
+    let mut driver = driver();
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
+    let mut host = TestHost::new();
+    let all = play(&mut session, &mut host, steps_for(&rec));
+    let info = Thumbswing::info(&Config::default());
+    // Before the first step (and between sessions) too.
+    for status in std::iter::once(DeviceStatus::not_armed()).chain(statuses(&all)) {
+        let actor = info.bus_actor("x", Duration::from_secs(2), None, &status);
+        let keys: Vec<String> = actor.telemetry.expect("telemetry").into_keys().collect();
+        assert_eq!(keys, ["cpi", "handed", "input", "profile", "synthetic"]);
+    }
 }
 
 #[test]

@@ -22,7 +22,10 @@
 //! reading, and empty while it is. Telemetry: `synthetic = "true"`, `input`
 //! (the name the input device reports), `cpi`, `profile` (the club in play)
 //! and `handed` (`rh` or `lh`), all of them when a session starts and then
-//! only what changed.
+//! only what changed; before that the actor carries `synthetic = "true"`,
+//! `input = "none"`, `cpi = "unknown"`, `profile = "none"` and
+//! `handed = "unknown"`. The phase is `connecting` while a connect opens
+//! the input and `measuring` once the session is up.
 //!
 //! The device id, for the host's logs and displays, is the input's
 //! `/dev/input/by-id` link name (the file name only, e.g.
@@ -205,6 +208,7 @@ impl Thumbswing {
         self.alerted = None;
         let hints = *ctx.hints();
         note_unknown_club(hints, &mut ctx.out);
+        ctx.out.phase("measuring");
         Ok(self.session(input, hints))
     }
 
@@ -313,7 +317,15 @@ impl FrpDriver for Thumbswing {
     const STOP_WAIT: Duration = Duration::from_secs(1);
 
     fn info(config: &Config) -> DriverInfo {
-        let info = DriverInfo::new(KIND, MODEL, Source::Virtual).with_manufacturer(MANUFACTURER);
+        let info = DriverInfo::new(KIND, MODEL, Source::Virtual)
+            .with_manufacturer(MANUFACTURER)
+            .with_telemetry(&[
+                ("synthetic", "true"),
+                ("input", "none"),
+                ("cpi", "unknown"),
+                ("profile", "none"),
+                ("handed", "unknown"),
+            ]);
         if config.detector.grab {
             info.exclusive()
         } else {
