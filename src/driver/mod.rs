@@ -102,11 +102,6 @@ pub struct Thumbswing {
     ids: ShotIds,
     /// Opens the device: [`device::open_setting`], or a test's inputs.
     opener: Opener,
-    /// An input given up front, served by the next connect instead of a
-    /// device.
-    given: Option<BoxedInput>,
-    /// Whether the given input has been served.
-    given_used: bool,
     /// The failure already alerted in this outage, for those alerted once.
     alerted: Option<Outage>,
 }
@@ -133,40 +128,25 @@ impl std::fmt::Debug for Thumbswing {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Thumbswing")
             .field("settings", &self.settings)
-            .field("given", &self.given.as_ref().map(|i| i.info().name.clone()))
             .finish_non_exhaustive()
     }
 }
 
 impl Thumbswing {
-    /// A driver that serves `input` (a [`Replay`](crate::recording::Replay)
-    /// of a recording) instead of opening a device. The first connect uses
-    /// it; once it has been served the driver gives up rather than
-    /// reconnecting.
-    ///
-    /// # Errors
-    /// The [`ConfigError`] of settings that are not valid.
-    pub fn with_input(
-        settings: Config,
-        input: impl Input + Send + 'static,
-    ) -> Result<Self, ConfigError> {
-        let mut driver = Self::new(settings)?;
-        driver.given = Some(Box::new(input));
-        Ok(driver)
-    }
-
     /// A session over `input`, opening nothing, with the club and hand from
-    /// `hints`: what [`connect`](FrpDriver::connect) returns after it has
+    /// `ctx`'s hints: what [`connect`](FrpDriver::connect) does after it has
     /// opened the device, for tests that feed the session a synthetic stream
     /// or a recording.
-    #[cfg(feature = "testing")]
-    #[must_use]
+    ///
+    /// # Errors
+    /// [`Error::Stopped`] after a stop.
+    #[cfg(any(test, feature = "testing"))]
     pub fn connect_with(
         &mut self,
+        ctx: &mut ConnectCtx<'_>,
         input: impl Input + Send + 'static,
-        hints: &TurnHints,
-    ) -> ThumbswingSession {
-        self.session(Box::new(input), *hints)
+    ) -> Result<ThumbswingSession, Error> {
+        self.opened(ctx, Box::new(input))
     }
 
     /// A driver whose [`connect`](FrpDriver::connect) gets its inputs from
@@ -212,6 +192,20 @@ impl Thumbswing {
             Error::Parse { .. } => "the recording could not be read".to_owned(),
             other => other.to_string(),
         }
+    }
+
+    /// The session over the opened `input`.
+    fn opened(
+        &mut self,
+        ctx: &mut ConnectCtx<'_>,
+        input: BoxedInput,
+    ) -> Result<ThumbswingSession, Error> {
+        // A stop while the device opened releases it here (dropping it closes it).
+        ctx.tick()?;
+        self.alerted = None;
+        let hints = *ctx.hints();
+        note_unknown_club(hints, &mut ctx.out);
+        Ok(self.session(input, hints))
     }
 
     fn session(&self, input: BoxedInput, hints: TurnHints) -> ThumbswingSession {
@@ -336,8 +330,6 @@ impl FrpDriver for Thumbswing {
             opener: Arc::new(|device, grab| {
                 device::open_setting(device, grab).map(|d| Box::new(d) as BoxedInput)
             }),
-            given: None,
-            given_used: false,
             alerted: None,
         })
     }
@@ -349,43 +341,29 @@ impl FrpDriver for Thumbswing {
     fn connect(&mut self, ctx: &mut ConnectCtx<'_>) -> Result<ThumbswingSession, Error> {
         ctx.tick()?;
         ctx.out.phase("connecting");
-        let input: BoxedInput = if let Some(given) = self.given.take() {
-            self.given_used = true;
-            given
-        } else if self.given_used {
-            return Err(Error::NotFound(
-                "the input given to the driver has been served".to_owned(),
-            ));
+        let grab = self.settings.detector.grab;
+        let input = (self.opener)(self.settings.device(), grab)?;
+        let info = input.info();
+        ctx.out.log(
+            Level::Info,
+            format!(
+                "opened {}{}",
+                info.name,
+                if info.grabbed { ", grabbed" } else { "" }
+            ),
+        );
+        ctx.out
+            .log(Level::Debug, format!("input at {}", info.path.display()));
+        let input: BoxedInput = if self.settings.device().is_none() {
+            Box::new(Reselect {
+                input,
+                opener: Arc::clone(&self.opener),
+                grab,
+            })
         } else {
-            let grab = self.settings.detector.grab;
-            let input = (self.opener)(self.settings.device(), grab)?;
-            let info = input.info();
-            ctx.out.log(
-                Level::Info,
-                format!(
-                    "opened {}{}",
-                    info.name,
-                    if info.grabbed { ", grabbed" } else { "" }
-                ),
-            );
-            ctx.out
-                .log(Level::Debug, format!("input at {}", info.path.display()));
-            if self.settings.device().is_none() {
-                Box::new(Reselect {
-                    input,
-                    opener: Arc::clone(&self.opener),
-                    grab,
-                })
-            } else {
-                input
-            }
+            input
         };
-        // A stop while the device opened releases it here (dropping it closes it).
-        ctx.tick()?;
-        self.alerted = None;
-        let hints = *ctx.hints();
-        note_unknown_club(hints, &mut ctx.out);
-        Ok(self.session(input, hints))
+        self.opened(ctx, input)
     }
 
     fn retry_delay(
@@ -394,21 +372,19 @@ impl FrpDriver for Thumbswing {
         backoff: &mut Backoff,
         out: &mut Events<'_>,
     ) -> Option<Duration> {
-        let give_up = matches!(ended.error, Some(Error::Unsupported))
-            || (self.given_used && self.given.is_none());
-        if let Some(error) = ended.error {
-            out.log(Level::Debug, format!("connect failed: {error}"));
-            let outage = Outage::of(error);
-            if outage.is_none() || outage != self.alerted {
-                let severity = if give_up {
-                    Severity::Error
-                } else {
-                    Severity::Warn
-                };
-                out.alert(severity, self.alert_text(error));
-            }
-            self.alerted = outage;
+        let error = ended.error;
+        let give_up = matches!(error, Error::Unsupported);
+        out.log(Level::Debug, format!("connect failed: {error}"));
+        let outage = Outage::of(error);
+        if outage.is_none() || outage != self.alerted {
+            let severity = if give_up {
+                Severity::Error
+            } else {
+                Severity::Warn
+            };
+            out.alert(severity, self.alert_text(error));
         }
+        self.alerted = outage;
         if give_up {
             None
         } else {
@@ -422,7 +398,7 @@ impl FrpDriver for Thumbswing {
     }
 }
 
-/// A connected trackball (or the input a driver was given).
+/// A connected trackball.
 pub struct ThumbswingSession {
     client: Client<BoxedInput>,
     identity: DeviceIdentity,
@@ -611,10 +587,7 @@ impl ThumbswingSession {
             return;
         }
         let key = self.ids.next_key();
-        match self.strike_ms(shot) {
-            Some(ms) => out.shot_trigger_at(key.clone(), ms),
-            None => out.shot_trigger(key.clone()),
-        }
+        out.shot_trigger(key.clone(), self.strike_ms(shot));
         out.launch(key.clone(), launch(&shot.launch));
         out.club(key.clone(), club_data(shot));
         out.shot_finished(key);
@@ -649,10 +622,9 @@ impl FrpSession for ThumbswingSession {
         &self.identity
     }
 
-    fn close(self, _out: &mut Events<'_>) -> Result<(), Error> {
+    fn close(self, _out: &mut Events<'_>) {
         // Dropping the client closes the input, which releases the grab.
         drop(self.client);
-        Ok(())
     }
 }
 

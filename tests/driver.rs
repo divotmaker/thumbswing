@@ -1,6 +1,6 @@
 //! The driver's session without hardware: synthetic swing streams and the
 //! JSONL fixtures through a replay input, via `Thumbswing::connect_with`, and
-//! `connect` with a given input.
+//! `connect` through a test opener.
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,7 +10,7 @@ use flightrelay::driver::{
     Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
 };
 use flightrelay::testing::{TestHost, bodies, status, statuses};
-use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey, blockers};
+use flightrelay::{FrpBody, Handedness, Mode, ShotKey, blockers};
 use thumbswing::driver::{Thumbswing, ThumbswingSession};
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::testing::{StreamBuilder, synthetic_recording};
@@ -84,6 +84,18 @@ fn driver() -> Thumbswing {
     Thumbswing::new(Config::default()).unwrap()
 }
 
+/// A session over `input`, connected with the turn's `hints`.
+fn open(
+    driver: &mut Thumbswing,
+    input: impl Input + Send + 'static,
+    hints: TurnHints,
+) -> ThumbswingSession {
+    TestHost::new()
+        .with_hints(hints)
+        .connect_with(|ctx| driver.connect_with(ctx, input))
+        .unwrap()
+}
+
 #[test]
 fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     let rec = two_swings();
@@ -91,7 +103,7 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
     let hints = TurnHints::default()
         .with_club(flightrelay::Club::Driver)
         .with_handedness(Handedness::Left);
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &hints);
+    let mut session = open(&mut driver, Replay::new(&rec, Pace::Fast), hints);
     assert_eq!(session.identity().device, "synthetic trackball");
     assert_eq!(
         session.identity().model.as_deref(),
@@ -190,7 +202,7 @@ fn a_session_sends_its_status_then_each_shot_once_with_the_turns_club() {
         }
     }
 
-    host.with(|_, out| session.close(out)).unwrap();
+    host.with(|_, out| session.close(out));
     assert!(
         statuses(&host.take()).is_empty(),
         "the host clears the status"
@@ -204,7 +216,11 @@ fn shot_numbers_keep_counting_across_sessions() {
     let mut host = TestHost::new();
     let mut keys = Vec::new();
     for _ in 0..2 {
-        let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+        let mut session = open(
+            &mut driver,
+            Replay::new(&rec, Pace::Fast),
+            TurnHints::default(),
+        );
         keys.extend(shot_keys(&bodies(&play(
             &mut session,
             &mut host,
@@ -218,7 +234,11 @@ fn shot_numbers_keep_counting_across_sessions() {
 fn a_swing_while_shots_are_held_takes_no_number() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
     let mut host = TestHost::new();
     host.flags.set_shots_allowed(false);
     // Up to the first swing's end and its cooldown.
@@ -237,7 +257,11 @@ fn a_swing_while_shots_are_held_takes_no_number() {
 fn turns_change_the_club_and_hand_only_when_they_differ() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
     let mut host = TestHost::new();
     let start = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(
@@ -290,7 +314,11 @@ fn turns_change_the_club_and_hand_only_when_they_differ() {
 fn tuning_and_thresholds_apply_to_a_running_session() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
     let mut slower = Config::default();
     slower.tuning.max_club_speed = 50.0;
     slower.detector.thresholds.gap_ms = 60;
@@ -329,7 +357,11 @@ fn every_fixture_plays_through_the_driver() {
         settings.detector.cpi = rec.header.cpi;
         settings.detector.report_limit = rec.header.report_limit;
         let mut driver = Thumbswing::new(settings).unwrap();
-        let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+        let mut session = open(
+            &mut driver,
+            Replay::new(&rec, Pace::Fast),
+            TurnHints::default(),
+        );
         let events = play(&mut session, &mut TestHost::new(), steps_for(&rec));
         let keys = shot_keys(&bodies(&events));
         let want: Vec<u32> = (1..=u32::try_from(expect.swings.len()).unwrap()).collect();
@@ -393,43 +425,30 @@ fn an_unplugged_input_reports_not_ready_until_it_is_back() {
         attempts: 0,
     };
     let mut driver = driver();
-    let mut session = driver.connect_with(input, &TurnHints::default());
+    let mut session = open(&mut driver, input, TurnHints::default());
     let events = play(&mut session, &mut TestHost::new(), 200);
     assert_eq!(ready_values(&events), [true, false, true]);
 }
 
 #[test]
-fn connect_serves_a_given_input_once_and_honors_stop() {
+fn connect_opens_through_the_opener_with_the_turns_club_and_honors_stop() {
     let rec = two_swings();
     let mut host = TestHost::new()
         .with_hints(TurnHints::default().with_club(flightrelay::Club::PitchingWedge));
-    let mut driver =
-        Thumbswing::with_input(Config::default(), Replay::new(&rec, Pace::Fast)).unwrap();
+    let replay = std::sync::Mutex::new(Some(Replay::new(&rec, Pace::Fast)));
+    let mut driver = Thumbswing::with_opener(Config::default(), move |_, _| {
+        let replay = replay.lock().unwrap().take();
+        replay
+            .map(|r| Box::new(r) as Box<dyn Input + Send>)
+            .ok_or_else(|| Error::NotFound("served".into()))
+    })
+    .unwrap();
 
     let session = host.connect(&mut driver).unwrap();
     assert_eq!(session.client().club(), thumbswing::Club::PitchingWedge);
     assert!(matches!(host.connect(&mut driver), Err(Error::NotFound(_))));
     host.stop().stop();
     assert!(matches!(host.connect(&mut driver), Err(Error::Stopped)));
-
-    // A served input is not reconnected.
-    let mut backoff = Backoff::default();
-    let e = Error::Disconnected;
-    let ended = SessionEnd::new(Some(&e), Some(Duration::from_secs(1)), 0);
-    host.take();
-    assert_eq!(
-        host.with(|_, out| driver.retry_delay(&ended, &mut backoff, out)),
-        None
-    );
-    let alerts: Vec<_> = host
-        .take()
-        .into_iter()
-        .filter_map(|e| match e {
-            DeviceEvent::Frp(FrpBody::BusAlert(alert)) => Some(alert.severity),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(alerts, [Severity::Error]);
 }
 
 #[test]
@@ -437,7 +456,8 @@ fn an_unsupported_platform_is_given_up_on_and_other_errors_retried() {
     let mut host = TestHost::new();
     let mut driver = driver();
     let mut backoff = Backoff::default();
-    let failed = |e| SessionEnd::new(Some(e), None, 1);
+    let now = host.now();
+    let failed = |e| SessionEnd::new(e, now, None, 1);
     assert_eq!(
         host.with(|_, out| driver.retry_delay(&failed(&Error::Unsupported), &mut backoff, out)),
         None
@@ -464,7 +484,11 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
     let mut host = TestHost::new();
 
     // No hints: the setting.
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
     let start = status(&play(&mut session, &mut host, 1)).telemetry;
     assert_eq!(
         (start["profile"].as_str(), start["handed"].as_str()),
@@ -516,7 +540,7 @@ fn the_setting_gives_the_club_and_hand_the_turn_does_not() {
 
     // The hints at connect win over the setting too.
     let hints = TurnHints::default().with_handedness(Handedness::Left);
-    let session = driver.connect_with(Replay::new(&rec, Pace::Fast), &hints);
+    let session = open(&mut driver, Replay::new(&rec, Pace::Fast), hints);
     assert_eq!(session.client().club(), thumbswing::Club::Iron5);
     assert_eq!(session.client().hand(), thumbswing::Hand::Left);
 }
@@ -528,7 +552,7 @@ fn the_putting_mode_selects_the_putter_whatever_the_club() {
     let putting = TurnHints::default()
         .with_mode(Mode::Putting)
         .with_club(flightrelay::Club::Driver);
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &putting);
+    let mut session = open(&mut driver, Replay::new(&rec, Pace::Fast), putting);
     assert_eq!(session.client().club(), thumbswing::Club::Putter);
     let mut host = TestHost::new();
     turn(&mut session, &mut host, putting.with_mode(Mode::Full));
@@ -546,7 +570,11 @@ fn the_putting_mode_selects_the_putter_whatever_the_club() {
 fn a_fast_replay_steps_without_idling_until_it_has_played() {
     let rec = two_swings();
     let mut driver = driver();
-    let mut session = driver.connect_with(Replay::new(&rec, Pace::Fast), &TurnHints::default());
+    let mut session = open(
+        &mut driver,
+        Replay::new(&rec, Pace::Fast),
+        TurnHints::default(),
+    );
     let mut host = TestHost::new();
     let mut steps = 0;
     // The recording is 3.6 s long, plus 3 s for the last swing to settle: the
@@ -586,7 +614,7 @@ fn alerts_for(driver: &mut Thumbswing, error: &Error, backoff: &mut Backoff) -> 
     host.flags.set_min_level(flightrelay::driver::Level::Debug);
     let mut alerts = Vec::new();
     let mut debug = Vec::new();
-    let ended = SessionEnd::new(Some(error), None, 1);
+    let ended = SessionEnd::new(error, host.now(), None, 1);
     let delay = host.with(|_, out| driver.retry_delay(&ended, backoff, out));
     for e in host.take() {
         match e {
@@ -670,7 +698,7 @@ fn a_choice_left_to_the_user_is_alerted_once_per_outage() {
     for _ in 0..9 {
         let ended = host.connect(&mut driver).err();
         if let Some(error) = ended {
-            let end = SessionEnd::new(Some(&error), None, 1);
+            let end = SessionEnd::new(&error, host.now(), None, 1);
             delays.push(host.with(|_, out| driver.retry_delay(&end, &mut backoff, out)));
         }
     }

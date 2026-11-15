@@ -85,6 +85,18 @@ fn peer(addr: std::net::SocketAddr) -> Vec<FrpMessage> {
     messages
 }
 
+/// A driver whose first connect serves `input`; later connects find nothing.
+fn serving(settings: Config, input: impl Input + Send + 'static) -> Thumbswing {
+    let input = std::sync::Mutex::new(Some(input));
+    Thumbswing::with_opener(settings, move |_, _| {
+        let input = input.lock().unwrap().take();
+        input
+            .map(|i| Box::new(i) as Box<dyn Input + Send>)
+            .ok_or_else(|| thumbswing::Error::NotFound("served".into()))
+    })
+    .unwrap()
+}
+
 #[test]
 fn a_peer_gets_the_shots_with_the_club_of_its_turn() {
     // Two swings: straight at full power, then a pull 20° left and a push 5°
@@ -113,7 +125,7 @@ fn a_peer_gets_the_shots_with_the_club_of_its_turn() {
             };
             let mut settings = Config::default();
             settings.detector.grab = false;
-            let driver = Thumbswing::with_input(settings, input).unwrap();
+            let driver = serving(settings, input);
             FrpServer::new(
                 driver,
                 ServerConfig::new(Target::listen("127.0.0.1:0"), SERVER_ID),
