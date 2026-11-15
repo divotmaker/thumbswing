@@ -1,7 +1,7 @@
 //! A thumbswing [`Shot`] as FRP domain types.
 
 use flightrelay::Velocity;
-use flightrelay::types::{ClubData, Launch as FrpLaunch};
+use flightrelay::{ClubData, Launch as FrpLaunch};
 
 use crate::client::Shot;
 use crate::launch::Launch;

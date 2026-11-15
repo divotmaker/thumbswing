@@ -9,10 +9,9 @@ use std::thread;
 use std::time::Duration;
 
 use flightrelay::driver::Stop;
-use flightrelay::types::roles;
 use flightrelay::{
     BusActor, EndpointConfig, FrpBody, FrpEndpoint, FrpMessage, FrpServer, GolferTurn, Handedness,
-    Mode, ServerConfig, ServerEvent, Source, Target,
+    Mode, ServerConfig, ServerEvent, Source, Target, roles,
 };
 use thumbswing::driver::Thumbswing;
 use thumbswing::recording::{Pace, Replay};

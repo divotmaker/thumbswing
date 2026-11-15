@@ -10,8 +10,7 @@ use flightrelay::driver::{
     Activity, Backoff, DeviceEvent, FrpDriver, FrpSession, SessionEnd, StatusChange, TurnHints,
 };
 use flightrelay::testing::{TestHost, bodies, status, statuses};
-use flightrelay::types::blockers;
-use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey};
+use flightrelay::{FrpBody, Handedness, Mode, Severity, ShotKey, blockers};
 use thumbswing::driver::{Thumbswing, ThumbswingSession};
 use thumbswing::recording::{Pace, Recording, Replay};
 use thumbswing::testing::{StreamBuilder, synthetic_recording};
