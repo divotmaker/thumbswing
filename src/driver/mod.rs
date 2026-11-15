@@ -54,7 +54,7 @@
 //! alerted once until the device opens. Off Linux, `connect` fails with
 //! [`Error::Unsupported`] and the driver gives up instead of retrying.
 
-mod convert;
+pub mod convert;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -75,7 +75,7 @@ use crate::input::{DeviceInfo, Input};
 use crate::sample::Sample;
 use crate::segment::CancelReason;
 
-pub use convert::{club_data, launch};
+use convert::{club_data, launch};
 
 /// The driver kind, for logs and config tables.
 pub const KIND: &str = "thumbswing";
@@ -676,12 +676,6 @@ impl From<Handedness> for Hand {
     }
 }
 
-/// The FRP club code for a thumbswing club.
-#[must_use]
-pub fn frp_club(club: Club) -> Option<flightrelay::Club> {
-    club.code().parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,7 +687,7 @@ mod tests {
         }
         for c in Club::ALL {
             assert_eq!(
-                frp_club(c).map(|f| f.to_string()),
+                convert::frp_club(c).map(|f| f.to_string()),
                 Some(c.code().to_owned())
             );
         }

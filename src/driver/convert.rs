@@ -4,7 +4,14 @@ use flightrelay::Velocity;
 use flightrelay::{ClubData, Launch as FrpLaunch};
 
 use crate::client::Shot;
+use crate::club::Club;
 use crate::launch::Launch;
+
+/// The FRP club code for a thumbswing club.
+#[must_use]
+pub fn frp_club(club: Club) -> Option<flightrelay::Club> {
+    club.code().parse().ok()
+}
 
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
