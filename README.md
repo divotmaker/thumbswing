@@ -122,7 +122,8 @@ sudo udevadm control --reload && sudo udevadm trigger
 prints these fixes when you cannot.
 
 The examples and `thumbswing-frp` take an exclusive grab by default, so the
-desktop cursor does not follow the ball (`--no-grab` or `--set grab=false`
+desktop cursor does not follow the ball (`grab=false` in `monitor`,
+`--set grab=false` in `thumbswing-frp` or `--no-grab` in `list` and `record`
 turns it off). The grab ends when the program exits.
 
 ## Quick start
@@ -133,8 +134,8 @@ turns it off). The grab ends when the program exits.
 cargo run --example list
 cargo run --example list -- --measure /dev/input/by-id/usb-…-event-mouse --seconds 30
 
-# 2. Swing and watch the numbers; settings are flags (see Settings below).
-cargo run --example monitor -- --device usb-…-event-mouse --full-power-speed 40
+# 2. Swing and watch the numbers; settings are key=value (see Settings below).
+cargo run --example monitor --features config -- device=usb-…-event-mouse tuning.full_power_speed=40
 
 # 3. Serve shots to a simulator over FRP on port 5881.
 cargo run --features frp --bin thumbswing-frp -- --set device=usb-…-event-mouse
@@ -147,10 +148,10 @@ cargo run --example replay -- session.jsonl --club DR
 ```
 
 The `device` setting (`thumbswing-frp`, the library's
-`device::open_setting`), `monitor --device`, `list --measure` and `record`
+`device::open_setting`), `monitor device=…`, `list --measure` and `record`
 all take a `/dev/input` path, a bare `/dev/input/by-id` name, or the name the
 device reports (for devices without a `by-id` link). Without a `device`
-setting or `--device`, the only readable trackball or mouse is used; when
+setting, the only readable trackball or mouse is used; when
 there is more than one, opening fails and lists them.
 
 ## thumbswing-frp
@@ -199,7 +200,9 @@ What goes on the bus (FRP 0.3.0):
   as `firmware` and `source: virtual` (every value is synthesized), the
   blockers (`not_armed` until the trackball is open and reading, empty while
   it is), and the telemetry keys `synthetic = "true"`, `input` (the device
-  name), `cpi`, `profile` (the club) and `handed`. The device's
+  name), `cpi`, `profile` (the club) and `handed`; before the session's
+  first step they read `synthetic = "true"`, `input = "none"`, `cpi =
+  "unknown"`, `profile = "none"` and `handed = "unknown"`. The device's
   `/dev/input/by-id` link name (the file name only, e.g.
   `usb-Example_Trackball-event-mouse`, or the device name when it has no such
   link) is the device id in the program's own log; it never goes on the bus.
@@ -210,18 +213,11 @@ What goes on the bus (FRP 0.3.0):
   no `shot.flight`: carry and roll are left to the simulator or a flight
   model.
 
-Development only: `--replay FILE` serves a recording instead of a device,
-starting when the first peer connects (`cpi` and `report_limit` default to
-the recording's header); `--fast` replays it as fast as it can be processed
-instead of at the recorded timing, and `--exit-after-replay` quits when it is
-done. Its actor id is `frp.actor_id` from the `--config` file (a new one is
-saved there when it has none, as for the device mode), else a new one for the
-run.
-
 ## Settings
 
-Every setting is a field of `thumbswing::Settings`: a `thumbswing-frp` key
-(`--set` or `--config`) and an `examples/monitor` flag. Each starts from the
+Every setting is a field of `thumbswing::Config`: a `thumbswing-frp` key
+(`--set` or `--config`), and the same key works as `key=value` in
+`examples/monitor`. Each starts from the
 default below; an invalid value is refused with the key named before the
 device is opened. The status line of `monitor` shows the values in
 use:
@@ -230,41 +226,41 @@ use:
 full 15.0 in/s | max 100 mph | angle 0.25 | curve 0.20 arcade | β 0.00 γ 1.0 | 7I RH | last 7I: back +12.0° 1.4 in, fwd −3.0° 13.5 in/s → 90 % 72 mph, path +1.1 face −0.8
 ```
 
-| Key | `monitor` flag | Default | Unit | What it sets |
-|---|---|---|---|---|
-| `device` | `--device` | unset | | the input; unset: the only trackball or mouse found |
-| `club` | `--club CODE` | 7I | FRP code | the club while the turn names none (`DR`, `3W`, `7I`, `PW`, `PT`, …) |
-| `hand` | `--hand RH\|LH` | rh | `rh`/`lh` | the player's hand while the turn names none |
-| `cpi` | `--cpi N` | 400 | counts/in | counts per inch of ball surface travel |
-| `report_limit` | `--report-limit N` | 127 | counts | largest `\|dx\|`/`\|dy\|` one report carries: 127, 2047 or 32767 |
-| `grab` | `--no-grab` | true | | exclusive grab, so the desktop cursor does not follow the ball |
-| `tuning.full_power_speed` | `--full-power-speed X` | 15 | in/s | forward peak speed that counts as 100 % power |
-| `tuning.max_club_speed` | `--max-club-speed X` | 100 | mph | driver club speed at full power (other clubs scale it) |
-| `tuning.max_putt_speed` | `--max-putt-speed X` | 11 | mph | putter club speed at full power |
-| `tuning.angle_gain` | `--angle-gain X` | 0.25 | °/° | face angle per degree of push direction |
-| `tuning.putt_angle_gain` | `--putt-angle-gain X` | 1 | °/° | putt line per degree of push direction |
-| `tuning.curve_gain` | `--curve-gain X` | 0.2 | °/° | face-to-path per degree between backswing line and push |
-| `tuning.curve_sense` | `--curve-sense SENSE` | arcade | | `arcade` or `physical` |
-| `tuning.backswing_power` | `--backswing-power X` | 0 | 0 to 1 | share of the power set by the backswing length |
-| `tuning.power_gamma` | `--power-gamma X` | 1 | | exponent of the power curve |
-| `tuning.mirror_for_left_hand` | `--mirror-for-left-hand` | false | | mirror the strokes for a left-handed player |
-| `tuning.face_max` | `--face-max X` | 20 | ° | largest face angle |
-| `tuning.face_to_path_max` | `--face-to-path-max X` | 25 | ° | largest face-to-path |
-| `thresholds.speed_window_ms` | `--speed-window-ms N` | 24 | ms | trailing window the speed is measured over |
-| `thresholds.gap_ms` | `--gap-ms N` | 50 | ms | silence that starts a new speed series |
-| `thresholds.v_start` | `--v-start X` | 0.067 | × full-power speed | speed that starts a backswing |
-| `thresholds.v_stop` | `--v-stop X` | 0.033 | × full-power speed | speed below which the ball counts as stopped (below `v_start`) |
-| `thresholds.v_min_swing` | `--v-min-swing X` | 0.133 | × full-power speed | speed a forward stroke must reach to be a swing |
-| `thresholds.dwell_min_ms` | `--dwell-min-ms N` | 40 | ms | how long the ball must stay below `v_stop` |
-| `thresholds.back_min` | `--back-min X` | 0.13 | × ℓ_full | shortest backswing |
-| `thresholds.full_cock` | `--full-cock X` | 0.67 | × ℓ_full | backswing length that counts as fully cocked |
-| `thresholds.fwd_min` | `--fwd-min X` | 0.17 | × ℓ_full | forward travel that makes a forward motion a stroke |
-| `thresholds.back_max_s` | `--back-max-s X` | 2 | s | longest backswing |
-| `thresholds.coil_timeout_s` | `--coil-timeout-s X` | 10 | s | how long a coiled backswing waits for the push |
-| `thresholds.fwd_window_ms` | `--fwd-window-ms N` | 300 | ms | longest forward stroke |
-| `thresholds.idle_settle_ms` | `--idle-settle-ms N` | 250 | ms | quiet time that ends the cooldown after a shot |
-| `thresholds.cooldown_max_s` | `--cooldown-max-s X` | 2 | s | longest cooldown after a shot |
-| `thresholds.pull_cone_deg` | `--pull-cone-deg X` | 75 | ° | widest angle from straight back that still counts as a pull |
+| Key | Default | Unit | What it sets |
+|---|---|---|---|
+| `device` | unset | | the input; unset: the only trackball or mouse found |
+| `club` | 7I | FRP code | the club while the turn names none (`DR`, `3W`, `7I`, `PW`, `PT`, …) |
+| `hand` | rh | `rh`/`lh` | the player's hand while the turn names none |
+| `cpi` | 400 | counts/in | counts per inch of ball surface travel |
+| `report_limit` | 127 | counts | largest `\|dx\|`/`\|dy\|` one report carries: 127, 2047 or 32767 |
+| `grab` | true | | exclusive grab, so the desktop cursor does not follow the ball |
+| `tuning.full_power_speed` | 15 | in/s | forward peak speed that counts as 100 % power |
+| `tuning.max_club_speed` | 100 | mph | driver club speed at full power (other clubs scale it) |
+| `tuning.max_putt_speed` | 11 | mph | putter club speed at full power |
+| `tuning.angle_gain` | 0.25 | °/° | face angle per degree of push direction |
+| `tuning.putt_angle_gain` | 1 | °/° | putt line per degree of push direction |
+| `tuning.curve_gain` | 0.2 | °/° | face-to-path per degree between backswing line and push |
+| `tuning.curve_sense` | arcade | | `arcade` or `physical` |
+| `tuning.backswing_power` | 0 | 0 to 1 | share of the power set by the backswing length |
+| `tuning.power_gamma` | 1 | | exponent of the power curve |
+| `tuning.mirror_for_left_hand` | false | | mirror the strokes for a left-handed player |
+| `tuning.face_max` | 20 | ° | largest face angle |
+| `tuning.face_to_path_max` | 25 | ° | largest face-to-path |
+| `thresholds.speed_window_ms` | 24 | ms | trailing window the speed is measured over |
+| `thresholds.gap_ms` | 50 | ms | silence that starts a new speed series |
+| `thresholds.v_start` | 0.067 | × full-power speed | speed that starts a backswing |
+| `thresholds.v_stop` | 0.033 | × full-power speed | speed below which the ball counts as stopped (below `v_start`) |
+| `thresholds.v_min_swing` | 0.133 | × full-power speed | speed a forward stroke must reach to be a swing |
+| `thresholds.dwell_min_ms` | 40 | ms | how long the ball must stay below `v_stop` |
+| `thresholds.back_min` | 0.13 | × ℓ_full | shortest backswing |
+| `thresholds.full_cock` | 0.67 | × ℓ_full | backswing length that counts as fully cocked |
+| `thresholds.fwd_min` | 0.17 | × ℓ_full | forward travel that makes a forward motion a stroke |
+| `thresholds.back_max_s` | 2 | s | longest backswing |
+| `thresholds.coil_timeout_s` | 10 | s | how long a coiled backswing waits for the push |
+| `thresholds.fwd_window_ms` | 300 | ms | longest forward stroke |
+| `thresholds.idle_settle_ms` | 250 | ms | quiet time that ends the cooldown after a shot |
+| `thresholds.cooldown_max_s` | 2 | s | longest cooldown after a shot |
+| `thresholds.pull_cone_deg` | 75 | ° | widest angle from straight back that still counts as a pull |
 
 As a `--config` file:
 
@@ -281,8 +277,8 @@ curve_sense = "physical"
 `ℓ_full` is the ball travel of 100 ms at full power (1.5 in at the default
 15 in/s). Every detection threshold is a fraction of the full-power speed or
 of `ℓ_full`, so setting `full_power_speed` to how hard you want 100 % to be
-adapts them all to the device. With `monitor --replay`, `--cpi` and
-`--report-limit` default to the recording's header.
+adapts them all to the device. With `monitor --replay`, `cpi` and
+`report_limit` default to the recording's header.
 
 The club, the hand, the thresholds and the tuning apply to a running device
 at once (the club and hand while the turn names none); a change
@@ -292,8 +288,8 @@ of `device`, `cpi`, `report_limit` or `grab` reopens it.
 
 Any device with relative X/Y axes works: a large arcade trackball, a
 thumb-ball trackball mouse, an ordinary mouse. They differ in counts per inch
-(CPI), report rate and per-report width, which is why every setting is a flag
-and why `list --measure` exists. Speed is measured over a 24 ms window
+(CPI), report rate and per-report width, which is why every setting can be
+changed and why `list --measure` exists. Speed is measured over a 24 ms window
 rather than per report, so a 125 Hz and a 1000 Hz device give the same
 numbers at the same settings.
 
@@ -307,9 +303,9 @@ the device's real limit (2047 for 12-bit, 32767 for 16-bit reports).
 ## Library
 
 ```rust,no_run
-use thumbswing::{Client, Club, Config, Event, device::Device};
+use thumbswing::{Client, Club, DetectorConfig, Event, device::Device};
 
-let config = Config::default();
+let config = DetectorConfig::default();
 let input = Device::open("/dev/input/by-id/usb-Example_Trackball-event-mouse", config.grab)?;
 let mut client = Client::new(input, config);
 client.set_club(Club::Driver);
@@ -336,13 +332,13 @@ own thread (`poll(2)` with a timeout, kernel timestamps on
 `CLOCK_MONOTONIC`); an unplug is `Event::Disconnected`, and the client reopens
 the device and sends `Event::Ready` when it is back.
 
-`Settings` holds everything a device runs with, and `Settings::validate`
+`Config` holds everything a device runs with, and `Config::validate`
 checks the ranges in the table above.
 
 Features:
 
-- **`config`** — serde on `Settings` (the keys above; a default writes
-  nothing) and `Settings` as a [flightrelay](https://crates.io/crates/flightrelay)
+- **`config`** — serde on `Config` (the keys above; a default writes
+  nothing) and `Config` as a [flightrelay](https://crates.io/crates/flightrelay)
   `DriverConfig`. No device stack: a settings form, including one built for
   WebAssembly, can use it.
 - **`driver`** — `thumbswing::driver::Thumbswing`, a flightrelay
@@ -394,9 +390,6 @@ cargo test --features frp,testing
   `thumbswing-frp --set` refusing a bad club or hand (`tests/settings.rs`).
 - FRP end to end in one process: the driver served to a peer that publishes
   a `golfer.turn` and receives the actor and the shots (`tests/frp.rs`).
-- The command line of `monitor`: defaults, every settings flag, invalid
-  values, the refusal to guess between several devices, and the flag ranges
-  against `Settings::validate` (`tests/cli.rs`).
 - Through the kernel: a uinput virtual mouse, opened by name, swung, unplugged
   and replugged (`tests/uinput.rs`). It needs a writable `/dev/uinput` and
   read access to the new event node, so it is ignored by default:
